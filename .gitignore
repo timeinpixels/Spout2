@@ -34,3 +34,25 @@ Icon
 # Files that might appear on external disk
 .Spotlight-V100
 .Trashes
+
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/Spout.lib.recipe
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/Spout.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutCopy.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutDirectX.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutFrameCount.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutGL.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutGLextensions.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutReceiver.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.log
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/CL.command.1.tlog
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/CL.read.1.tlog
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/CL.write.1.tlog
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/Lib.command.1.tlog
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/Lib-link.read.1.tlog
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/Lib-link.write.1.tlog
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSDK.tlog/SpoutSDK.lastbuildstate
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSender.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSenderNames.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutSharedMemory.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/SpoutUtils.obj
+/SPOUTSDK/SpoutGL/VS2017/x64/Debug/vcpkg.applocal.log
