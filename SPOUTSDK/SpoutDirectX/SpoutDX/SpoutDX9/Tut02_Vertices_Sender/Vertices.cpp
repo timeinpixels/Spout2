@@ -85,7 +85,7 @@ HRESULT InitD3D( HWND hWnd )
 	//
 
 	// Spout logging options
-	// OpenSpoutConsole(); // Console only for debugging
+	OpenSpoutConsole(); // Console only for debugging
 	// EnableSpoutLog(); // Log to console
 	// EnableSpoutLogFile("Vertices DX9 Sender.log"); // Log to file
 	// SetSpoutLogLevel(SPOUT_LOG_WARNING); // show only warnings and errors
@@ -105,8 +105,7 @@ HRESULT InitD3D( HWND hWnd )
 	g_pd3dDevice = sender.GetDX9device();
 
 	// Load a texture for display
-	// D3DXCreateTextureFromFileA(g_pd3dDevice, "koala-on-tree.jpg", &g_pTexture);
-	D3DXCreateTextureFromFileA(g_pd3dDevice, "Australia_Zoo_Wombat.jpg", &g_pTexture);
+	D3DXCreateTextureFromFileA(g_pd3dDevice, "koala-on-tree.jpg", &g_pTexture);
 
 	// ================================================================================
 
@@ -217,7 +216,10 @@ VOID Cleanup()
 VOID Render()
 {
     // Clear the backbuffer to black
-    g_pd3dDevice->Clear( 0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB( 0, 0, 0 ), 1.0f, 0 );
+    // LJ DEBUG 
+	// g_pd3dDevice->Clear( 0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB( 0, 0, 0 ), 1.0f, 0 );
+	// D3DFMT_A8R8G8B8
+	g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_RGBA(0, 0, 0, 0xff), 1.0f, 0);
 
 	// Use the sender's texture for rendering
 	if (g_pTexture) {
@@ -272,14 +274,6 @@ VOID Render()
 	// Present the backbuffer contents to the display
 	g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
 
-	//
-	// SPOUT - fps control
-	//
-	// Hold a target frame rate - e.g. 60 or 30fps
-	// This is not necessary if the application already has fps control.
-	// If frame count is enabled, receivers will detect the sender fps
-	// sender.HoldFps(30);
-
 }
 
 
@@ -291,11 +285,6 @@ LRESULT WINAPI MsgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam )
 {
     switch( msg )
     {
-		// SPOUT - RH click to open SpoutPanel
-		case WM_RBUTTONDOWN:
-			sender.SelectSender();
-			break;
-	
 		case WM_DESTROY:
             Cleanup();
             PostQuitMessage( 0 );

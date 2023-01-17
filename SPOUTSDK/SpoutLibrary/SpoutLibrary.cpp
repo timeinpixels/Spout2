@@ -61,11 +61,37 @@
 //				   Update documentation comments
 //				   Re-build 32/64 bit - VS2017 / MT
 //		24.04.21 - ReceiveTexture - return if flagged for update
-//				   only if there is a texture to receive into.
-//				   Re-build 32/64 bit - VS2017 / MT
+//		10.06.21 - Re-build 32/64 bit - VS2017 / MT
+//		20.07.21 - Change generic local log level definition to avoid
+//				   conflict with other libraries and applications.
+//		25.07.21   Re-build 32/64 bit - VS2017 / Multi-threaded DLL (/MD)
+//		24.10.21 - Rebuild with updated SpoutGL files 32/64 bit /MD
+//		24.11.21 - Add SelectSenderPanel for 2.006 compatibility
+//		17.12.21 - Add timing utility functions
+//		27.12.21 - Rebuild 32/64 bit /MD for update 2.007.006
+//		28.01.22 - Remove <d3d9.h> from SpoutLibrary.h (Issue #77)
+//		24.02.22 - Rebuild 32/64 bit /MD Version 2.007.007
+//		21.03.22 - Change local LogLevel enum to more unique SpoutLibLogLevel
+//				   Initialize Spout object pointer
+//		11.04.22 - Option disable warning C26812 (unscoped enums) for Visual Studio
+//		10.05.22 - Correct OpenSpoutConsole to use "spoututils::"
+//		12.05.22 - Rebuild VS2022 - 32/64 bit /MD
+//				   Spout Version 2.007.008
+//		31.10.22 - Add GetPerformancePreference, SetPerformancePreference, GetPreferredAdapterName
+//				   Corrected SpoutLog to use _dolog
+//		01.11.22 - Add SetPreferredAdapter, GetSDKversion, IsLaptop
+//		03.11.22 - Add IsPreferenceAvailable
+//		25.22.33 - Revise SpoutSenderNmaes UpdateSenderFps / HoldFps
+//				   Add GetRefreshRate
+//		30.11.22 - Add IsApplicationPath
+//		22.12.22 - Compiler compatibility check
+//				   Conditional compile of preference functions
+//		26.12.22 - Add missing SPOUT_LOG_NONE to SpoutLibLogLevel
+//				   Rebuild release VS2022 - 32/64 bit /MD
+//				   Spout Version 2.007.009
 //
 /*
-		Copyright (c) 2016-2021, Lynn Jarvis. All rights reserved.
+		Copyright (c) 2016-2023, Lynn Jarvis. All rights reserved.
 
 		Redistribution and use in source and binary forms, with or without modification, 
 		are permitted provided that the following conditions are met:
@@ -92,7 +118,8 @@
 #include "SpoutLibrary.h"
 #include "..\SpoutGL\Spout.h"
 
-using namespace spoututils;
+#include <d3d11.h>
+#pragma comment (lib, "d3d11.lib")// the Direct3D 11 Library file
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -169,7 +196,9 @@ class SPOUTImpl : public SPOUTLIBRARY
 
 public:
 
-	Spout * spout; // Spout SDK functions object for this class
+	// Spout SDK functions object for this class
+	// Initialize in GetSpout()
+	Spout * spout;
 
 private: // Spout SDK functions
 
@@ -193,7 +222,6 @@ private: // Spout SDK functions
 	//    - Update the sender and class variables	
 	//
 
-
 	// Function: SetSenderName
 	// Set name for sender creation
 	//
@@ -213,12 +241,12 @@ private: // Spout SDK functions
 	void ReleaseSender(DWORD dwMsec = 0);
 
 	// Function: SendFbo
-	// Send texture attached to fbo.
+	// Send texture attached to fbo
 	//
-	//   The fbo must be currently bound.  
-	//   The sending texture can be larger than the size that the sender is set up for.  
+	//   The fbo must be currently bound
+	//   The sending texture can be larger than the size that the sender is set up for
 	//   For example, if the application is using only a portion of the allocated texture space,  
-	//   such as for Freeframe plugins. (The 2.006 equivalent is DrawToSharedTexture).
+	//   such as for Freeframe plugins. (The 2.006 equivalent is DrawToSharedTexture)
 	//
 	bool SendFbo(GLuint FboID, unsigned int width, unsigned int height, bool bInvert = true);
 
@@ -308,10 +336,10 @@ private: // Spout SDK functions
 	// Function: SetReceiverName
 	// Specify sender for connection
 	//
-	//   The application will not connect to any other  unless the user selects one
-	//   If that sender closes, the application will wait for the nominated sender to open 
-	//   If no name is specified, the receiver will connect to the active sender
-	void SetReceiverName(const char * SenderName);
+	//   - If a name is specified, the receiver will not connect to any other unless the user selects one.
+	//   - If that sender closes, the receiver will wait for the nominated sender to open. 
+	//   - If no name is specified, the receiver will connect to the active sender.
+	void SetReceiverName(const char * SenderName = nullptr);
 
 	// Function: ReleaseReceiver
 	// Close receiver and release resources ready to connect to another sender
@@ -439,6 +467,10 @@ private: // Spout SDK functions
 	// Function: HoldFps
 	// Frame rate control
 	void HoldFps(int fps);
+
+	// Function: GetRefreshRate
+	// Get system refresh rate
+	double GetRefreshRate();
 	
 	// Function: SetFrameSync
 	// Signal sync event 
@@ -449,47 +481,73 @@ private: // Spout SDK functions
 	bool WaitFrameSync(const char *SenderName, DWORD dwTimeout = 0);
 
 	//
-	// Group: Memory sharing
+	// Group: Data sharing
 	//
 	//   General purpose data exchange functions using shared memory.
 	//   These functions can be used in addition to texture sharing.
 	//   Typical uses will be for data attached to the video frame,
-	//   commonly referred to as Metadata.
+	//   commonly referred to as "per frame Metadata".
 	//
-	//   If used directly after sending and after receiving, the data
-	//   will be associated with the same video frame, but frames may 
-	//   be missed if sender and receiver have different frame rates.
-	//   If strict synchronization is required, they should be used
-	//   in combination with event signal functions.
+	//   Notes for synchronisation.
+	//
+	//   If used before sending and after receiving, the data will be 
+	//   associated with the same video frame, but frames may be missed 
+	//   if the receiver has a lower frame rate than the sender.
+	//
+	//   If strict synchronization is required, the data sharing functions
+	//   should be used in combination with event signal functions. The sender
+	//   frame rate will be matched exactly to that of the receiver and the 
+	//   receiver will not miss any frames.
 	//
 	//      - void SetFrameSync(const char* SenderName);
 	//      - bool WaitFrameSync(const char *SenderName, DWORD dwTimeout = 0);
-	//   
-	//   Before sending a frame and/or writing data, the sender should wait
-	//   for a signal from the receiver that it is ready to read another frame.
-	//   Use this before any rendering occurs to prevent timing variability.
-	//   After reading a frame and data, the receiver should signal that it is
-	//   ready to read another. Use this after rendering has completed.
-	//   The practical result is that the sender will be matched exactly to the
-	//   frame rate of the receiver and there will be no missed frames.
 	//
-	//   Shared memory is created and the size established on the first call
-	//   to WriteMemoryBuffer and is released when a sender or receiver is closed.
+	//   WaitFrameSync
+	//   A sender should use this before rendering or sending texture or data and
+	//   wait for a signal from the receiver that it is ready to read another frame.
+	//
+	//   SetFrameSync
+	//   After receiving a texture, rendering the result and reading data
+	//   a receiver should signal that it is ready to read another. 
 	//
 
 	// Function: WriteMemoryBuffer
 	// Write buffer to shared memory.
 	//
-	//    Creates a shared memory map of the required size if it does not exist yet
+	//    If shared memory has not been created in advance, it will be
+	//    created on the first call to this function at the length specified.
+	//
+	//    This is acceptable if the data to send is fixed in length.
+	//    Otherwise the shared memory should be created in advance of sufficient
+	//    size to contain the maximum length expected (see CreateMemoryBuffer).
+	//
 	//    The map is closed when the sender is released.
+	//
 	bool WriteMemoryBuffer(const char *sendername, const char* data, int length);
 
 	// Function: ReadMemoryBuffer
-	// Read shared memory to buffer.
+	// Read shared memory to a buffer.
 	//
-	//    Opens a sender memory map and retains the handle.
+	//    Open a memory map and retain the handle.
 	//    The map is closed when the receiver is released.
 	int  ReadMemoryBuffer(const char* sendername, char* data, int maxlength);
+
+	// Function: CreateMemoryBuffer
+	// Create a shared memory buffer.
+	//
+	//    Create a memory map and retain the handle.
+	//    This function should be called before any buffer write
+	//    if the length of the data to send will vary.
+	//    The map is closed when the sender is released.
+	bool CreateMemoryBuffer(const char *name, int length);
+
+	// Function: DeleteMemoryBuffer
+	// Delete a sender shared memory buffer.
+	bool DeleteMemoryBuffer();
+
+	// Function: GetMemoryBufferSize
+	// Get the number of bytes available for data transfer.
+	int GetMemoryBufferSize(const char *name);
 
 	//
 	// Group: Log utilities
@@ -542,7 +600,7 @@ private: // Spout SDK functions
 
 	// Function: SetSpoutLogLevel
 	// Set the current log level
-	void SetSpoutLogLevel(LogLevel level);
+	void SetSpoutLogLevel(SpoutLibLogLevel level);
 
 	// Function: SpoutLog
 	// General purpose log
@@ -614,6 +672,34 @@ private: // Spout SDK functions
 	// Find subkey
 	bool FindSubKey(HKEY hKey, const char *subkey);
 
+	//
+	// Group: Information
+	//
+
+	// ---------------------------------------------------------
+	// Function: GetSDKversion
+	// Spout SDK version.
+	std::string GetSDKversion();
+
+	// ---------------------------------------------------------
+	// Function: IsLaptop
+	// Return whether the system is a laptop.
+	//
+	// Queries power status. Battery power most likely means laptop.
+	bool IsLaptop();
+
+	//
+	// Group: Timing utilities
+	//
+
+	// Function: StartTiming
+	// Start timing interval
+	void StartTiming();
+
+	// Function: EndTiming
+	// Return timing interval
+	double EndTiming();
+	
 	//
 	// Group: OpenGL shared texture
 	//
@@ -692,12 +778,12 @@ private: // Spout SDK functions
 	// Function: SetMaxSenders
 	// Set user Maximum senders allowed
 	void SetMaxSenders(int maxSenders);
+
 	
 	//
 	// Group: 2.006 compatibility
 	//
-	// These functions are not necessary for Version 2.007.
-	// But are retained for compatibility with existing 2.006 code.
+	// These functions are retained for compatibility with existing 2.006 code.
 	//
 
 	// Function: CreateSender
@@ -749,6 +835,11 @@ private: // Spout SDK functions
 	// Set user share mode
 	//  0 - texture, 1 - memory, 2 - CPU
 	void SetShareMode(int mode);
+
+	// Function: SelectSender
+	// Open sender selection dialog
+	//  2.006 compatibility only. Use SelectSender()
+	void SelectSenderPanel();
 
 	//
 	// Group: Information
@@ -810,9 +901,86 @@ private: // Spout SDK functions
 	// Get adapter index
 	int GetAdapter();
 	
-	// Function: SetAdapter
-	// Set graphics adapter for output
-	bool SetAdapter(int index = 0);
+	//
+	// Group: Graphics preference
+	//
+	// Windows 10+ SDK required
+	//
+#if VER_PRODUCTBUILD > 9600
+
+	//---------------------------------------------------------
+	// Function: GetPerformancePreference
+	// Get the Windows graphics preference for an application
+	//
+	//	-1 - Not registered
+	//
+	//	 0 - DXGI_GPU_PREFERENCE_UNSPECIFIED
+	//
+	//	 1 - DXGI_GPU_PREFERENCE_MINIMUM_POWER
+	//
+	//	 2 - DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE
+	//
+	int GetPerformancePreference(const char* path);
+
+	//---------------------------------------------------------
+	// Function: SetPerformancePreference
+	// Set the Windows graphics preference for an application
+	//
+	//     -1 - No preference
+	//
+	//      0 - Default
+	//
+	//      1 - Power saving
+	//
+	//      2 - High performance
+	//
+	bool SetPerformancePreference(int preference, const char* path);
+
+	//---------------------------------------------------------
+	// Function: GetPreferredAdapterName
+	//
+	// Get the graphics adapter name for a Windows preference
+	// This is the first adapter for the given preference :
+	//
+	//    DXGI_GPU_PREFERENCE_UNSPECIFIED - (0) Equivalent to EnumAdapters1
+	//
+	//    DXGI_GPU_PREFERENCE_MINIMUM_POWER - (1) Integrated GPU
+	//
+	//    DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE - (2) External GPU / Discrete GPU
+	//
+	bool GetPreferredAdapterName(int preference, char* adaptername, int maxchars);
+
+	//---------------------------------------------------------
+	// Function: SetPreferredAdapter
+	//
+	// Set graphics adapter index for a Windows preference
+	//
+	// This index is used by CreateDX11device when DirectX is intitialized
+	//
+	//    DXGI_GPU_PREFERENCE_UNSPECIFIED - (0) Equivalent to EnumAdapters1
+	//
+	//    DXGI_GPU_PREFERENCE_MINIMUM_POWER - (1) Integrated GPU
+	//
+	//    DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE - (2) External GPU / Discrete GPU
+	//
+	bool SetPreferredAdapter(int preference);
+
+	//---------------------------------------------------------
+	// Function: IsPreferenceAvailable()
+	// Availability of Windows graphics preference settings.
+	//
+	// Settings are available from Windows 10 April 2018 update 
+	// (Version 1803, build 17134) and later.
+	bool IsPreferenceAvailable();
+
+	//---------------------------------------------------------
+	// Function: IsApplicationPath
+	//
+	// Is the path a valid application
+	//
+	// A valid application path will have a drive letter and terminate with ".exe"
+	bool IsApplicationPath(const char* path);
+#endif
 
 	//
 	// Group: OpenGL utilities
@@ -835,6 +1003,27 @@ private: // Spout SDK functions
 		GLuint DestID, GLuint DestTarget,
 		unsigned int width, unsigned int height,
 		bool bInvert = false, GLuint HostFBO = 0);
+
+
+	//
+	// Group: DirectX utilities
+	//
+
+	bool OpenDirectX();
+	void CloseDirectX();
+	
+	// Function: OpenDirectX11
+	// Initialize and prepare DirectX 11
+	bool OpenDirectX11(void * pDevice = nullptr);
+	void CloseDirectX11();
+
+	// Function: GetDX11Device
+	// Return the class device
+	void * GetDX11Device();
+
+	// Function: GetDX11Context
+	// Return the class context
+	void * GetDX11Context();
 
 	//
 	// Group: Class release
@@ -1040,6 +1229,11 @@ void SPOUTImpl::HoldFps(int fps)
 	return spout->HoldFps(fps);
 }
 
+double SPOUTImpl::GetRefreshRate()
+{
+	return spoututils::GetRefreshRate();
+}
+
 void SPOUTImpl::SetFrameSync(const char* SenderName)
 {
 	return spout->SetFrameSync(SenderName);
@@ -1050,14 +1244,29 @@ bool SPOUTImpl::WaitFrameSync(const char *SenderName, DWORD dwTimeout)
 	return spout->WaitFrameSync(SenderName, dwTimeout);
 }
 
-bool SPOUTImpl::WriteMemoryBuffer(const char *sendername, const char* data, int length)
+bool SPOUTImpl::WriteMemoryBuffer(const char *name, const char* data, int length)
 {
-	return spout->WriteMemoryBuffer(sendername, data, length);
+	return spout->WriteMemoryBuffer(name, data, length);
 }
 
-int SPOUTImpl::ReadMemoryBuffer(const char* sendername, char* data, int maxlength)
+int SPOUTImpl::ReadMemoryBuffer(const char* name, char* data, int maxlength)
 {
-	return spout->ReadMemoryBuffer(sendername, data, maxlength);
+	return spout->ReadMemoryBuffer(name, data, maxlength);
+}
+
+bool SPOUTImpl::CreateMemoryBuffer(const char *name, int length)
+{
+	return spout->CreateMemoryBuffer(name, length);
+}
+
+bool SPOUTImpl::DeleteMemoryBuffer()
+{
+	return spout->DeleteMemoryBuffer();
+}
+
+int SPOUTImpl::GetMemoryBufferSize(const char *name)
+{
+	return spout->GetMemoryBufferSize(name);
 }
 
 
@@ -1104,16 +1313,16 @@ void SPOUTImpl::DisableSpoutLog()
 	spoututils::DisableSpoutLog();
 }
 
-void SPOUTImpl::SetSpoutLogLevel(LogLevel level)
+void SPOUTImpl::SetSpoutLogLevel(SpoutLibLogLevel level)
 {
-	spoututils::SetSpoutLogLevel((SpoutLogLevel)level);
+	spoututils::SetSpoutLogLevel(static_cast<spoututils::SpoutLogLevel>(level));
 }
 
 void SPOUTImpl::SpoutLog(const char* format, ...)
 {
 	va_list args;
 	va_start(args, format);
-	spoututils::SpoutLog(format, args);
+	spoututils::_doLog(spoututils::SPOUT_LOG_NONE, format, args);
 	va_end(args);
 }
 
@@ -1202,6 +1411,26 @@ bool SPOUTImpl::RemoveSubKey(HKEY hKey, const char *subkey)
 bool SPOUTImpl::FindSubKey(HKEY hKey, const char *subkey)
 {
 	return spoututils::FindSubKey(hKey, subkey);
+}
+
+std::string SPOUTImpl::GetSDKversion()
+{
+	return spoututils::GetSDKversion();
+}
+
+bool SPOUTImpl::IsLaptop()
+{
+	return spoututils::IsLaptop();
+}
+
+void SPOUTImpl::StartTiming()
+{
+	spoututils::StartTiming();
+}
+
+double SPOUTImpl::EndTiming()
+{
+	return spoututils::EndTiming();
 }
 
 bool SPOUTImpl::IsInitialized()
@@ -1359,6 +1588,12 @@ void SPOUTImpl::SetShareMode(int mode)
 	spout->SetShareMode(mode);
 }
 
+void SPOUTImpl::SelectSenderPanel()
+{
+	spout->SelectSender();
+}
+
+
 //
 // Information
 //
@@ -1427,10 +1662,39 @@ int SPOUTImpl::GetAdapter()
 	return spout->GetAdapter();
 }
 
-bool SPOUTImpl::SetAdapter(int index)
+// Windows 10+ SDK required
+#if VER_PRODUCTBUILD > 9600
+int SPOUTImpl::GetPerformancePreference(const char* path)
 {
-	return spout->SetAdapter(index);
+	return spout->GetPerformancePreference(path);
 }
+
+bool SPOUTImpl::SetPerformancePreference(int preference, const char* path)
+{
+	return spout->SetPerformancePreference(preference, path);
+}
+
+bool SPOUTImpl::GetPreferredAdapterName(int preference, char* adaptername, int maxchars)
+{
+	return spout->GetPreferredAdapterName(preference, adaptername, maxchars);
+}
+
+bool SPOUTImpl::SetPreferredAdapter(int preference)
+{
+	return spout->SetPreferredAdapter(preference);
+}
+
+bool SPOUTImpl::IsPreferenceAvailable()
+{
+	return spout->IsPreferenceAvailable();
+}
+
+bool SPOUTImpl::IsApplicationPath(const char* path)
+{
+	return spout->IsApplicationPath(path);
+}
+#endif
+
 
 //
 // OpenGL utilities
@@ -1456,18 +1720,56 @@ bool SPOUTImpl::CopyTexture(GLuint SourceID, GLuint SourceTarget,
 }
 
 //
+// DirectX utilities
+//
+
+bool SPOUTImpl::OpenDirectX()
+{
+	return spout->OpenDirectX();
+}
+
+void SPOUTImpl::CloseDirectX()
+{
+	spout->CloseDirectX();
+}
+
+bool SPOUTImpl::OpenDirectX11(void * pDevice)
+{
+	// A cast from void* can use static_cast
+	return spout->OpenDirectX11(static_cast<ID3D11Device*>(pDevice));
+}
+
+void SPOUTImpl::CloseDirectX11()
+{
+	spout->spoutdx.CloseDirectX11();
+}
+
+void * SPOUTImpl::GetDX11Device()
+{
+	// void cast conversion can be implicit
+	return spout->GetDX11Device();
+}
+
+void * SPOUTImpl::GetDX11Context()
+{
+	// void cast conversion can be implicit
+	return spout->GetDX11Device();
+}
+
+
+//
 // Class function
 //
 
 void SPOUTImpl::Release()
 {
-	// Delete Spout object
+	// Delete the spout object instance
 	delete(spout);
 	spout = nullptr;
-
 	// Delete this class instance
 	delete this;
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Factory function that creates instances if the SPOUT object.
@@ -1492,7 +1794,7 @@ extern "C" SPOUTAPI SPOUTHANDLE APIENTRY GetSpout()
 	// The Spout class implementation
 	SPOUTImpl * pSpout = new SPOUTImpl;
 
-	// Create a new spout sender pointer for this class
+	// Create a new spout pointer for this class
 	pSpout->spout = new Spout;
 
 	return pSpout;

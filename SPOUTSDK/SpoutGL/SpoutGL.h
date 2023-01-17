@@ -5,7 +5,7 @@
 	Base class for OpenGL SpoutSDK
 	See also Sender and Receiver wrapper classes.
 
-	Copyright (c) 2021, Lynn Jarvis. All rights reserved.
+	Copyright (c) 2021-2023, Lynn Jarvis. All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without modification, 
 	are permitted provided that the following conditions are met:
@@ -45,6 +45,10 @@
 #include <direct.h> // for _getcwd
 #include <TlHelp32.h> // for PROCESSENTRY32
 #include <tchar.h> // for _tcsicmp
+#include <algorithm> // for string character remove
+
+// 
+#pragma warning(disable : 26485)
 
 using namespace spoututils;
 
@@ -53,7 +57,7 @@ class SPOUT_DLLEXP spoutGL {
 	public:
 
 	spoutGL();
-    ~spoutGL();
+    virtual ~spoutGL();
 
 	//
 	// OpenGL shared texture access
@@ -98,7 +102,7 @@ class SPOUT_DLLEXP spoutGL {
 	int GetMaxSenders();
 	// Set user Maximum senders allowed
 	void SetMaxSenders(int maxSenders);
-
+	
 	//
 	// 2.006 compatibility
 	//
@@ -131,7 +135,7 @@ class SPOUT_DLLEXP spoutGL {
 	// Vertical sync status
 	int GetVerticalSync();
 	// Lock to monitor vertical sync
-	bool SetVerticalSync(bool bSync = true);
+	bool SetVerticalSync(int interval = 1);
 	// Get Spout version
 	int GetSpoutVersion();
 
@@ -153,6 +157,12 @@ class SPOUT_DLLEXP spoutGL {
 	// DX11 texture write
 	//  o Copy a DX11 texture to the shared DX11 texture
 	bool WriteTexture(ID3D11Texture2D** texture);
+	// DX11 texture write with readback to OpenGL texture
+	//   o Copy a DX11 texture to the DX11 shared texture
+	//   o Copy the linked OpenGL texture back to and OpenGL texture
+	bool WriteTextureReadback(ID3D11Texture2D** texture, GLuint TextureID, GLuint TextureTarget,
+		unsigned int width, unsigned int height, bool bInvert, GLuint HostFBO = 0);
+
 
 	// Initialize OpenGL and DX11
 	//     o Load extensions and check for availability and function
@@ -174,7 +184,6 @@ class SPOUT_DLLEXP spoutGL {
 	bool CloseOpenGL();
 	// Class initialization status
 	bool IsSpoutInitialized();
-
 	// Perform tests for GL/DX interop availability and compatibility
 	bool GLDXready();
 	// Set host path to sender shared memory
@@ -186,12 +195,12 @@ class SPOUT_DLLEXP spoutGL {
 	// 2.006 compatibility
 	//
 
-	bool OpenDirectX11();
+	bool OpenDirectX11(ID3D11Device* pDevice = nullptr);
 	ID3D11Device* GetDX11Device();
 	ID3D11DeviceContext* GetDX11Context();
 	void CleanupDirectX();
 	void CleanupDX11();
-	void CleanupInterop();
+	bool CleanupInterop();
 
 	//
 	// OpenGL extensions
@@ -221,7 +230,7 @@ class SPOUT_DLLEXP spoutGL {
 	//
 
 	// Link a shared DirectX texture to an OpenGL texture
-	HANDLE LinkGLDXtextures(void* pDXdevice, void* pSharedTexture, HANDLE dxShareHandle, GLuint glTextureID);
+	HANDLE LinkGLDXtextures(void* pDXdevice, void* pSharedTexture, GLuint glTextureID);
 	// Return a handle to the the DX/GL interop device
 	HANDLE GetInteropDevice();
 	// Copy OpenGL to shared DirectX 11 texture via CPU
@@ -230,132 +239,20 @@ class SPOUT_DLLEXP spoutGL {
 	bool ReadDX11texture(GLuint TextureID, GLuint TextureTarget, unsigned int width, unsigned int height, bool bInvert, GLuint HostFBO);
 
 	//
-	// Memory sharing
+	// Data sharing
 	//
 
-	// Write data
-	bool WriteMemoryBuffer(const char *sendername, const char* data, int length);
-	// Read data
-	int  ReadMemoryBuffer(const char* sendername, char* data, int maxlength);
+	// Write data to shared memory
+	bool WriteMemoryBuffer(const char *name, const char* data, int length);
+	// Read data from shared memory
+	int ReadMemoryBuffer(const char* name, char* data, int maxlength);
+	// Create a shared memory buffer
+	bool CreateMemoryBuffer(const char *name, int length);
+	// Delete a shared memory buffer
+	bool DeleteMemoryBuffer();
+	// Get the number of bytes available for data transfer
+	int GetMemoryBufferSize(const char *name);
 
-	struct {
-
-		SpoutSharedMemory *senderMem;
-		unsigned int m_Width;
-		unsigned int m_Height;
-
-		// Create a sender named shared memory map for general purpose
-		// NOTE:
-		//    Width and height are in bytes
-		//    Height may be 1 for a luminance map
-		//    Width should be a multiple of 16 for best performance
-		bool CreateSenderMemory(const char *sendername, unsigned int width, unsigned int height)
-		{
-			std::string namestring = sendername;
-
-			// Create a name for the map from the sender name
-			namestring += "_map";
-
-			// Close an existing map
-			if (senderMem) {
-				CloseSenderMemory();
-				senderMem = nullptr;
-			}
-
-			// Create a new shared memory class object
-			senderMem = new SpoutSharedMemory();
-
-			// Create the sender's shared memory map.
-			// This also creates a mutex to lock and unlock the map for reads.
-			SpoutCreateResult result = senderMem->Create(namestring.c_str(), (int)(width*height));
-			if (result == SPOUT_CREATE_FAILED) {
-				delete senderMem;
-				senderMem = nullptr;
-				m_Width = 0;
-				m_Height = 0;
-				return false;
-			}
-
-			// Set the width and height for future reference
-			m_Width = width;
-			m_Height = height;
-
-			return true;
-
-		} // end CreateSenderMemory
-
-		// Open an existing named shared memory map
-		bool OpenSenderMemory(const char *sendername)
-		{
-			std::string namestring = sendername;
-			// Create a name for the map from the sender name
-			namestring += "_map";
-			// Create a new shared memory class object for this receiver
-			if (!senderMem)
-				senderMem = new SpoutSharedMemory();
-			// Open the sender's shared memory map.
-			// This also creates a mutex for the receiver
-			// to lock and unlock the map for reads.
-			if (!senderMem->Open(namestring.c_str())) {
-				// SpoutLogError("spoutGL.memoryshare::OpenSenderMemory - open shared memory failed");
-				return false;
-			}
-			return true;
-		} // end OpenSenderMemory
-
-		// Close the sender shared memory map
-		void CloseSenderMemory()
-		{
-			if (senderMem) {
-				senderMem->Close();
-				delete senderMem;
-			}
-			senderMem = nullptr;
-			m_Width = 0;
-			m_Height = 0;
-		} // end CloseSenderMemory
-
-		// Lock and unlock memory and retrieve buffer pointer - no size checks
-		unsigned char * LockSenderMemory()
-		{
-			if (!senderMem) return nullptr;
-			char *pBuf = senderMem->Lock();
-			if (!pBuf) {
-				// https://github.com/leadedge/Spout2/issues/15
-				// senderMem->Unlock();
-				return nullptr;
-			}
-			return reinterpret_cast<unsigned char *>(pBuf);
-		}
-
-		void UnlockSenderMemory()
-		{
-			if (!senderMem) return;
-			senderMem->Unlock();
-		}
-
-		unsigned int GetSenderMemorySize()
-		{
-			return m_Width*m_Height;
-		}
-
-		const char* GetSenderMemoryName()
-		{
-			if (!senderMem)
-				return nullptr;
-			return senderMem->Name();
-		}
-
-		bool GetSenderMemory(const char *sendername)
-		{
-			if (sendername[0] == 0)
-				return false;
-
-			return senderMem->Open(sendername);
-		}
-
-	} memoryshare;
-	
 	//
 	// For external access
 	//
@@ -370,6 +267,10 @@ class SPOUT_DLLEXP spoutGL {
 	spoutFrameCount frame;
 
 protected :
+
+	
+	// For 2.006(receive only) / WriteMemoryBuffer / ReadMemoryBuffer
+	SpoutSharedMemory memoryshare;
 
 	// GL/DX functions
 	bool CreateInterop(unsigned int width, unsigned int height, DWORD dwFormat, bool bReceive);
@@ -395,6 +296,7 @@ protected :
 	GLuint m_pbo[4];
 	int PboIndex;
 	int NextPboIndex;
+
 	int m_nBuffers;
 	bool UnloadTexturePixels(GLuint TextureID, GLuint TextureTarget,
 		unsigned int width, unsigned int height, unsigned int pitch,
@@ -414,21 +316,22 @@ protected :
 
 	// Staging textures for DX11 CPU copy
 	ID3D11Texture2D* m_pStaging[2];
+
 	int m_Index;
 	int m_NextIndex;
 	bool CheckStagingTextures(unsigned int width, unsigned int height, int nTextures);
 
-	// Shared memory
+	// 2.006 shared memory
 	bool ReadMemoryTexture(const char* sendername, GLuint TexID, GLuint TextureTarget, unsigned int width, unsigned int height, bool bInvert = false, GLuint HostFBO = 0);
 	bool ReadMemoryPixels(const char* sendername, unsigned char* pixels, unsigned int width, unsigned int height, GLenum glFormat = GL_RGBA, bool bInvert = false);
 	bool WriteMemoryPixels(const char *sendername, const unsigned char* pixels, unsigned int width, unsigned int height, GLenum glFormat = GL_RGBA, bool bInvert = false);
-	bool CreateMemoryBuffer(const char *sendername, unsigned int length);
 
 	// Utility
 	bool OpenDeviceKey(const char* key, int maxsize, char* description, char* version);
 	void trim(char* s);
 
 	// Errors
+	void DoDiagnostics(const char *error);
 	void PrintFBOstatus(GLenum status);
 	bool GLerror();
 
@@ -442,28 +345,33 @@ protected :
 	unsigned int m_Width;
 	unsigned int m_Height;
 
-	// General
-	GLuint m_fbo; // Fbo used for OpenGL functions
+	// Utility
+	GLuint m_fbo; //  Fbo used for OpenGL functions
 	GLuint m_TexID; // Class texture used for invert copy
 	unsigned int m_TexWidth;
 	unsigned int m_TexHeight;
 	DWORD m_TexFormat;
+
+	// Shared texture
 	GLuint m_glTexture; // OpenGL shared texture
 	ID3D11Texture2D* m_pSharedTexture; // DirectX shared texture
 	HANDLE m_dxShareHandle; // DirectX shared texture handle
 	DWORD m_dwFormat; // DirectX shared texture format
 	DXGI_FORMAT m_DX11format; // DirectX 11 texture format
+	bool m_bKeyed; // Keyed shared texture
 
 	// GL/DX interop
 	HANDLE m_hInteropDevice; // Handle to the DX/GL interop device
 	HANDLE m_hInteropObject; // Handle to the DX/GL interop object (the shared texture)
+
+	// General
 	HWND m_hWnd; // OpenGL window
 	int m_SpoutVersion; // Spout version
 
 	// For CreateOpenGL and CloseOpenGL
-	HDC m_hdc = NULL;
-	HWND m_hwndButton = NULL;
-	HGLRC m_hRc = NULL;
+	HDC m_hdc;
+	HWND m_hwndButton;
+	HGLRC m_hRc;
 
 	// Status flags
 	bool m_bConnected;
@@ -471,6 +379,7 @@ protected :
 	bool m_bInitialized;
 	bool m_bMirror;  // Mirror image (used for SpoutCam)
 	bool m_bSwapRB;  // RGB <> BGR (used for SpoutCam)
+	bool m_bGLDXdone; // Compatibility test done
 
 	// Sharing modes
 	bool m_bAuto;         // Auto share mode - user set
@@ -478,7 +387,7 @@ protected :
 	bool m_bUseGLDX;      // Hardware GL/DX interop compatibility
 	bool m_bTextureShare; // Using texture sharing methods
 	bool m_bCPUshare;     // Using CPU sharing methods
-	bool m_bMemoryShare;  // 2.006 sender using memoryshare methods
+	bool m_bMemoryShare;  // Using 2.006 memoryshare methods
 	
 	// Sender sharing modes
 	bool m_bSenderCPU;    // Sender using CPU sharing methods

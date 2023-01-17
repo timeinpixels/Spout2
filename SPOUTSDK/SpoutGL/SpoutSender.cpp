@@ -68,11 +68,18 @@
 //					- Add data function WriteMemoryBuffer
 //		10.04.21	- Add GetCPU and GetGLDX
 //		24.04.21	- Add OpenGL shared texture access functions
+//		03.06.21	- Add CreateMemoryBuffer, DeleteMemoryBuffer, GetMemoryBufferSize
+//		22.11.21	- Remove ReleaseSender() from destructor
+//		31.10.22	- Add GetPerformancePreference, SetPerformancePreference, GetPreferredAdapterName
+//		01.11.22	- Add SetPreferredAdapter
+//		03.11.22	- Add IsPreferenceAvailable
+//		07.11.22	- Add IsApplicationPath
+//		26.11.22	- Change SetVerticalSync argument to integer to allow adaptive vsync
 //
 // ====================================================================================
 /*
 
-	Copyright (c) 2014-2021, Lynn Jarvis. All rights reserved.
+	Copyright (c) 2014-2023, Lynn Jarvis. All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without modification, 
 	are permitted provided that the following conditions are met:
@@ -129,7 +136,7 @@ SpoutSender::SpoutSender()
 //---------------------------------------------------------
 SpoutSender::~SpoutSender()
 {
-	ReleaseSender();
+
 }
 
 //---------------------------------------------------------
@@ -264,14 +271,33 @@ bool SpoutSender::WaitFrameSync(const char *SenderName, DWORD dwTimeout)
 }
 
 //
-// Memory sharing
+// Data sharing
 //
 
 //---------------------------------------------------------
-bool SpoutSender::WriteMemoryBuffer(const char *sendername, const char* data, int length)
+bool SpoutSender::WriteMemoryBuffer(const char *name, const char* data, int length)
 {
-	return spout.WriteMemoryBuffer(sendername, data, length);
+	return spout.WriteMemoryBuffer(name, data, length);
 }
+
+//---------------------------------------------------------
+bool SpoutSender::CreateMemoryBuffer(const char *name, int length)
+{
+	return spout.CreateMemoryBuffer(name,length);
+}
+
+//---------------------------------------------------------
+bool SpoutSender::DeleteMemoryBuffer()
+{
+	return spout.DeleteMemoryBuffer();
+}
+
+//---------------------------------------------------------
+int SpoutSender::GetMemoryBufferSize(const char* name)
+{
+	return spout.GetMemoryBufferSize(name);
+}
+
 
 //
 // OpenGL shared texture access
@@ -369,7 +395,7 @@ bool SpoutSender::SetActiveSender(const char* Sendername)
 //
 
 //---------------------------------------------------------
-int SpoutSender::SpoutSender::GetNumAdapters()
+int SpoutSender::GetNumAdapters()
 {
 	return spout.GetNumAdapters();
 }
@@ -393,16 +419,56 @@ int SpoutSender::GetAdapter()
 }
 
 //---------------------------------------------------------
-bool SpoutSender::SetAdapter(int index)
+bool SpoutSender::GetAdapterInfo(char* description, char* output, int maxchars)
 {
-	return spout.SetAdapter(index);
+	return spout.GetAdapterInfo(description, output, maxchars);
 }
 
 //---------------------------------------------------------
-bool SpoutSender::GetAdapterInfo(char *renderdescription, char *displaydescription, int maxchars)
+bool SpoutSender::GetAdapterInfo(int index, char* description, char* output, int maxchars)
 {
-	return spout.GetAdapterInfo(renderdescription, displaydescription, maxchars);
+	return spout.GetAdapterInfo(index, description, output, maxchars);
 }
+
+// Windows 10 Vers 1803, build 17134 or later
+#ifdef NTDDI_WIN10_RS4
+
+//---------------------------------------------------------
+int SpoutSender::GetPerformancePreference(const char* path)
+{
+	return spout.GetPerformancePreference(path);
+}
+
+//---------------------------------------------------------
+bool SpoutSender::SetPerformancePreference(int preference, const char* path)
+{
+	return spout.SetPerformancePreference(preference, path);
+}
+
+//---------------------------------------------------------
+bool SpoutSender::GetPreferredAdapterName(int preference, char* adaptername, int maxchars)
+{
+	return spout.GetPreferredAdapterName(preference, adaptername, maxchars);
+}
+
+//---------------------------------------------------------
+bool SpoutSender::SetPreferredAdapter(int preference)
+{
+	return spout.SetPreferredAdapter(preference);
+}
+
+//---------------------------------------------------------
+bool SpoutSender::IsPreferenceAvailable()
+{
+	return spout.IsPreferenceAvailable();
+}
+
+//---------------------------------------------------------
+bool SpoutSender::IsApplicationPath(const char* path)
+{
+	return spout.IsApplicationPath(path);
+}
+#endif
 
 //
 // User settings recorded by "SpoutSettings"
@@ -506,9 +572,9 @@ int SpoutSender::GetVerticalSync()
 }
 
 //---------------------------------------------------------
-bool SpoutSender::SetVerticalSync(bool bSync)
+bool SpoutSender::SetVerticalSync(int interval)
 {
-	return spout.SetVerticalSync(bSync);
+	return spout.SetVerticalSync(interval);
 }
 
 //---------------------------------------------------------

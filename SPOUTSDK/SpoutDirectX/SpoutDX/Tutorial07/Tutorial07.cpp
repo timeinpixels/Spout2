@@ -116,8 +116,16 @@ ID3D11ShaderResourceView* g_pSpoutTextureRV = nullptr; // Shader resource view o
 void ResetDevice();
 void SelectAdapter();
 INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK SenderProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK AdapterProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+
+// Options
 bool g_bAutoAdapt = false; // Auto switch to the same adapter as the sender (menu option)
+bool bClassdevice = false; // Create a SpoutDX class device (see InitDevice)
+
+
+// Statics for dialog box
+static char sendername[256];
 static std::string adaptername[10];
 static int adaptercount = 0;
 static int currentadapter = 0;
@@ -137,20 +145,22 @@ int WINAPI wWinMain( _In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 	// SPOUT Options
 	//
 
-	OpenSpoutConsole(); // Console only for debugging
-	EnableSpoutLog(); // Enable Spout logging to console
+	// OpenSpoutConsole(); // Console only for debugging
+	// EnableSpoutLog(); // Enable Spout logging to console
 	// EnableSpoutLogFile("Tutorial07.log"); // Log to file
 	// SetSpoutLogLevel(SPOUT_LOG_WARNING); // show only warnings and errors
 
 	// Set the name of the sender to receive from.
 	// The receiver will only connect to that sender.
-	// The user can over-ride this by selecting another.
+	// The user can over-ride this by selecting another (receiver.SelectSender())
+	// It can be cleared with a null sender name (receiver.SetReceiverName())
 	// receiver.SetReceiverName("Spout Demo Sender");
-
     if( FAILED( InitWindow( hInstance, nCmdShow ) ) )
         return 0;
 
-    if( FAILED( InitDevice() ) )
+	// SPOUT
+	// See InitDevice for creating a Spout class device
+	if( FAILED( InitDevice() ) )
     {
         CleanupDevice();
         return 0;
@@ -163,22 +173,24 @@ int WINAPI wWinMain( _In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 	//
 	// Menu options for change of graphics adapter
 	//
+
+	// The "Select graphics adapter" menu option allows selection
+	// and change to the same adapter as used by a sender.
+	//
+	// The "Auto switch adapter" menu option enables auto switch to
+	// the same adapter as the sender. Search for : IDM_AUTO_ADAPTER 
+	// for more detail on the "SetAdapterAuto()" function which 
+	// enables or disables this option..
+	//
 	// Both sender and receiver must use the same graphics adapter.
+	// If the "Auto switch adapter" menu option is enabled, selection 
+	// of a different graphics adapter will result in change back to 
+	// the sender graphics adapter.
 	//
-	// "Select graphics adapter" allows manual selection and change
-	// to the same adapter as used by a particluar sender.
+	// Graphics adapter selection requires the device to be created
+	// in the SpoutDX class (see InitDevice). If a class device was
+	// not created, remove the menu option.
 	//
-	// "Auto switch adapter" enables auto switch to the same adapter as the sender.
-	// The "SetAdapterAuto()" function enables or disables this option.
-	// The D3D11 device must have been be created within the SpoutDX class
-	// or the function has no effect.
-	// If this menu option is enabled, manual selection of graphics adapter
-	// will result in change back to the sender graphics adapter.
-	//
-	// See : IDM_AUTO_ADAPTER
-	// receiver.SetAdapterAuto();
-	//
-	// Selection of graphics adapter requires a class device
 	if (!receiver.IsClassDevice()) {
 		HMENU hPopup = GetSubMenu(GetMenu(g_hWnd), 0);
 		RemoveMenu(hPopup, IDM_ADAPTER, MF_BYCOMMAND);
@@ -322,82 +334,97 @@ HRESULT InitDevice()
     UINT width  = rc.right - rc.left;
     UINT height = rc.bottom - rc.top;
 
+	// ===============================================================
 	//
 	// SPOUT
 	//
-	// Option
+	// Option: Create a device within the SpoutDX class.
 	//
-	// Create a device within the SpoutDX class.
-	// IsClassDevice() will return whether this has been done.
-	// ===============================================================
-	if (receiver.OpenDirectX11()) {
-		g_pd3dDevice = receiver.GetDX11Device();
-		g_pImmediateContext = receiver.GetDX11Context();
+	// InitDevice() will return the hr result after swap chain creation
+	// iwhether a class device is ceated or an application device is created as usual. 
+	//
+	// Use the current graphics adapter index (currentadapter). This can then
+	// be selected by the user to change the adapter (see SelectAdapter).
+	//
+	// Graphics adapter selection requires a class device.
+	// Both sender and receiver must be using the same graphics adapter
+	//
+	// The alternative is to use OpenDirectX11() after an application device
+	// has been created. See the code following InitDevice() at program start.
+	//
+
+	// Change the option when bClassdevice is initialized or here
+	bClassdevice = true;
+
+	if (bClassdevice) {
+		if (receiver.OpenDirectX11()) {
+			// Set the application device and context to those created in the SpoutDX class
+			g_pd3dDevice = receiver.GetDX11Device();
+			g_pImmediateContext = receiver.GetDX11Context();
+		}
+		else {
+			return 0;
+		}
 	}
 	else {
-		return 0;
-	}
-	// ===============================================================
 
-	/*
-	// ===============================================================
-	UINT createDeviceFlags = 0;
+		// Usual creation of an application device
+		UINT createDeviceFlags = 0;
 #ifdef _DEBUG
-	createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+		createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
-	// SPOUT note
-	// GL/DX interop Spec
-	// ID3D11Device can only be used on WDDM operating systems : Must be multithreaded
+		// SPOUT note
+		// GL/DX interop Spec
+		// ID3D11Device can only be used on WDDM operating systems : Must be multithreaded
 
-	D3D_DRIVER_TYPE driverTypes[] =
-	{
-		D3D_DRIVER_TYPE_HARDWARE,
-		D3D_DRIVER_TYPE_WARP,
-		D3D_DRIVER_TYPE_REFERENCE,
-	};
-	UINT numDriverTypes = ARRAYSIZE(driverTypes);
-
-	D3D_FEATURE_LEVEL featureLevels[] =
-	{
-		D3D_FEATURE_LEVEL_11_1,
-		D3D_FEATURE_LEVEL_11_0,
-		D3D_FEATURE_LEVEL_10_1,
-		D3D_FEATURE_LEVEL_10_0,
-	};
-	UINT numFeatureLevels = ARRAYSIZE(featureLevels);
-
-	for (UINT driverTypeIndex = 0; driverTypeIndex < numDriverTypes; driverTypeIndex++)
-	{
-		g_driverType = driverTypes[driverTypeIndex];
-		hr = D3D11CreateDevice(nullptr, g_driverType, nullptr, createDeviceFlags, featureLevels, numFeatureLevels,
-			D3D11_SDK_VERSION, &g_pd3dDevice, &g_featureLevel, &g_pImmediateContext);
-
-		if (hr == E_INVALIDARG)
+		D3D_DRIVER_TYPE driverTypes[] =
 		{
-			// DirectX 11.0 platforms will not recognize D3D_FEATURE_LEVEL_11_1 so we need to retry without it
-			hr = D3D11CreateDevice(nullptr, g_driverType, nullptr, createDeviceFlags, &featureLevels[1], numFeatureLevels - 1,
+			D3D_DRIVER_TYPE_HARDWARE,
+			D3D_DRIVER_TYPE_WARP,
+			D3D_DRIVER_TYPE_REFERENCE,
+		};
+		UINT numDriverTypes = ARRAYSIZE(driverTypes);
+
+		D3D_FEATURE_LEVEL featureLevels[] =
+		{
+			D3D_FEATURE_LEVEL_11_1,
+			D3D_FEATURE_LEVEL_11_0,
+			D3D_FEATURE_LEVEL_10_1,
+			D3D_FEATURE_LEVEL_10_0,
+		};
+		UINT numFeatureLevels = ARRAYSIZE(featureLevels);
+
+		for (UINT driverTypeIndex = 0; driverTypeIndex < numDriverTypes; driverTypeIndex++)
+		{
+			g_driverType = driverTypes[driverTypeIndex];
+			hr = D3D11CreateDevice(nullptr, g_driverType, nullptr, createDeviceFlags, featureLevels, numFeatureLevels,
 				D3D11_SDK_VERSION, &g_pd3dDevice, &g_featureLevel, &g_pImmediateContext);
+
+			if (hr == E_INVALIDARG)
+			{
+				// DirectX 11.0 platforms will not recognize D3D_FEATURE_LEVEL_11_1 so we need to retry without it
+				hr = D3D11CreateDevice(nullptr, g_driverType, nullptr, createDeviceFlags, &featureLevels[1], numFeatureLevels - 1,
+					D3D11_SDK_VERSION, &g_pd3dDevice, &g_featureLevel, &g_pImmediateContext);
+			}
+
+			if (SUCCEEDED(hr))
+				break;
 		}
+		if (FAILED(hr))
+			return hr;
 
-		if (SUCCEEDED(hr))
-			break;
+		// If an application DirectX 11.0 device was created above,
+		// the device pointer must be passed in to the SpoutDX class.
+		// The function does nothing if a class device was already created.
+		if (!receiver.OpenDirectX11(g_pd3dDevice))
+			return S_FALSE;
 	}
-	if (FAILED(hr))
-		return hr;
 
-	// SPOUT
-	// If an application DirectX 11.0 device was created above,
-	// the device pointer must be passed in to the SpoutDX class.
-	// The function does nothing if a class device was already created.
-	//
-	if (!receiver.OpenDirectX11(g_pd3dDevice))
-		return FALSE;
+
 	// ===============================================================
-	*/
-
-
-    // Obtain DXGI factory from device (since we used nullptr for pAdapter above)
+	
+	// Obtain DXGI factory from device (since we used nullptr for pAdapter above)
     IDXGIFactory1* dxgiFactory = nullptr;
     {
         IDXGIDevice* dxgiDevice = nullptr;
@@ -578,34 +605,34 @@ HRESULT InitDevice()
     SimpleVertex vertices[] =
     {
         { XMFLOAT3( -1.0f, 1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
-        { XMFLOAT3( 1.0f, 1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
-        { XMFLOAT3( 1.0f, 1.0f, 1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
-        { XMFLOAT3( -1.0f, 1.0f, 1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
+        { XMFLOAT3(  1.0f, 1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
+        { XMFLOAT3(  1.0f, 1.0f,  1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
+        { XMFLOAT3( -1.0f, 1.0f,  1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
 
         { XMFLOAT3( -1.0f, -1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
-        { XMFLOAT3( 1.0f, -1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
-        { XMFLOAT3( 1.0f, -1.0f, 1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
-        { XMFLOAT3( -1.0f, -1.0f, 1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
+        { XMFLOAT3(  1.0f, -1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
+        { XMFLOAT3(  1.0f, -1.0f, 1.0f ),  XMFLOAT2( 1.0f, 1.0f ) },
+        { XMFLOAT3( -1.0f, -1.0f, 1.0f ),  XMFLOAT2( 0.0f, 1.0f ) },
 
-        { XMFLOAT3( -1.0f, -1.0f, 1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
+        { XMFLOAT3( -1.0f, -1.0f, 1.0f ),  XMFLOAT2( 0.0f, 1.0f ) },
         { XMFLOAT3( -1.0f, -1.0f, -1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
-        { XMFLOAT3( -1.0f, 1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
-        { XMFLOAT3( -1.0f, 1.0f, 1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
+        { XMFLOAT3( -1.0f,  1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
+        { XMFLOAT3( -1.0f,  1.0f, 1.0f ),  XMFLOAT2( 0.0f, 0.0f ) },
 
-        { XMFLOAT3( 1.0f, -1.0f, 1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
+        { XMFLOAT3( 1.0f, -1.0f,  1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
         { XMFLOAT3( 1.0f, -1.0f, -1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
-        { XMFLOAT3( 1.0f, 1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
-        { XMFLOAT3( 1.0f, 1.0f, 1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
+        { XMFLOAT3( 1.0f,  1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
+        { XMFLOAT3( 1.0f,  1.0f,  1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
 
         { XMFLOAT3( -1.0f, -1.0f, -1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
-        { XMFLOAT3( 1.0f, -1.0f, -1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
-        { XMFLOAT3( 1.0f, 1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
-        { XMFLOAT3( -1.0f, 1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
+        { XMFLOAT3(  1.0f, -1.0f, -1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
+        { XMFLOAT3(  1.0f,  1.0f, -1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
+        { XMFLOAT3( -1.0f,  1.0f, -1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
 
         { XMFLOAT3( -1.0f, -1.0f, 1.0f ), XMFLOAT2( 1.0f, 1.0f ) },
-        { XMFLOAT3( 1.0f, -1.0f, 1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
-        { XMFLOAT3( 1.0f, 1.0f, 1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
-        { XMFLOAT3( -1.0f, 1.0f, 1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
+        { XMFLOAT3(  1.0f, -1.0f, 1.0f ), XMFLOAT2( 0.0f, 1.0f ) },
+        { XMFLOAT3(  1.0f,  1.0f, 1.0f ), XMFLOAT2( 0.0f, 0.0f ) },
+        { XMFLOAT3( -1.0f,  1.0f, 1.0f ), XMFLOAT2( 1.0f, 0.0f ) },
     };
 
     D3D11_BUFFER_DESC bd = {};
@@ -754,9 +781,16 @@ void CleanupDevice()
     if( g_pSwapChain1 ) g_pSwapChain1->Release();
     if( g_pSwapChain ) g_pSwapChain->Release();
     if( g_pImmediateContext1 ) g_pImmediateContext1->Release();
-    if( g_pImmediateContext ) g_pImmediateContext->Release();
-    if( g_pd3dDevice1 ) g_pd3dDevice1->Release();
-    if( g_pd3dDevice ) g_pd3dDevice->Release();
+	if (g_pd3dDevice1) g_pd3dDevice1->Release();
+
+	// SPOUT
+	// If the device and context have been created in SpoutDX
+	// do not release them here
+	if (!receiver.IsClassDevice()) {
+		if (g_pImmediateContext) g_pImmediateContext->Release();
+		if (g_pd3dDevice) g_pd3dDevice->Release();
+	}
+
 
 }
 
@@ -790,6 +824,12 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam 
 		// Parse the menu selections:
 		switch (LOWORD(wParam))
 		{
+			// Select sender
+			case IDM_SENDER:
+				// Sender selection dialog box 
+				sendername[0] = 0; // Clear static name for dialog
+				DialogBox(g_hInst, MAKEINTRESOURCE(IDD_SENDERBOX), g_hWnd, (DLGPROC)SenderProc);
+				break;
 			// Select graphics adapter
 			case IDM_ADAPTER:
 				SelectAdapter();
@@ -875,30 +915,101 @@ void Render()
     }
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+	//
 	// SPOUT
 	//
-	// Receive a sender texture
-	if (receiver.ReceiveTexture(&g_pReceivedTexture)) {
+	// A texture can be received to a local texture
+	// or to a texture withing the SpoutDX class.
+	//
+	// Change the receiving option here for testing
+	//   1 - receive to a local texture (g_pReceivedTexture)
+	//   2 - receive to a SpoutDX class texture
+	//
+	int option = 1;
 
+	if (option == 1) {
 		//
-		// Sender details can be retrieved with :
-		//		const char * GetSenderName();
-		//		unsigned int GetSenderWidth();
-		//		unsigned int GetSenderHeight();
-		//		DXGI_FORMAT GetSenderFormat();
-		//		HANDLE GetSenderHandle;
-		//		long GetSenderFrame();
-		//		double GetSenderFps();
+		// Option 1 : Receive from a sender to a local texture
 		//
+		if (receiver.ReceiveTexture(&g_pReceivedTexture)) {
+			// Create or re-create the receiving texture 
+			// for a new sender or if the sender size changed
+			if (receiver.IsUpdated()) {
 
-		// Create or re-create the receiving texture 
-		// for a new sender or if the sender size changed
-		if (receiver.IsUpdated()) {
-
-			if (receiver.GetAdapterAuto()) {
 				// The D3D11 device within the SpoutDX class could have changed
 				// if it has switched to use a different sender graphics adapter.
-				// Re-intialize to refresh the global device pointer.
+				// Re-intialize to refresh the application global device pointer.
+				if (receiver.GetAdapterAuto()) {
+					if (g_pd3dDevice != receiver.GetDX11Device()) {
+						ResetDevice();
+						// No more this round because the receiver has been released
+						// and there is no width or height to create a texture.
+						return;
+					}
+				}
+
+				// Update the receiving texture
+				if (g_pReceivedTexture)	g_pReceivedTexture->Release();
+				g_pReceivedTexture = nullptr;
+				receiver.CreateDX11texture(g_pd3dDevice,
+					receiver.GetSenderWidth(),
+					receiver.GetSenderHeight(),
+					receiver.GetSenderFormat(),
+					&g_pReceivedTexture);
+
+				// Any other action required by the receiver can be done here
+				// In this example, clear the shader resource view
+				if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
+				g_pSpoutTextureRV = nullptr;
+			}
+
+			// A texture has been received
+
+			// In this example, a shader resource view is created if the frame is new
+			if (receiver.IsFrameNew()) {
+				if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
+				g_pSpoutTextureRV = nullptr;
+				D3D11_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc;
+				ZeroMemory(&shaderResourceViewDesc, sizeof(shaderResourceViewDesc));
+				// Matching format with the sender is important
+				shaderResourceViewDesc.Format = receiver.GetSenderFormat();
+				shaderResourceViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				shaderResourceViewDesc.Texture2D.MostDetailedMip = 0;
+				shaderResourceViewDesc.Texture2D.MipLevels = 1;
+				g_pd3dDevice->CreateShaderResourceView(g_pReceivedTexture, &shaderResourceViewDesc, &g_pSpoutTextureRV);
+			}
+		}
+		else {
+			// A sender was not found or the connected sender closed
+			// Release the receiving texture
+			if (g_pReceivedTexture)	g_pReceivedTexture->Release();
+			g_pReceivedTexture = nullptr;
+			// Release the texture resource view so render uses the default
+			if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
+			g_pSpoutTextureRV = nullptr;
+		}
+
+	}
+	else if (option == 2) {
+		//
+		// Option 2 : Receive from a sender to a SpoutDX class texture
+		//
+		if (receiver.ReceiveTexture()) {
+			//
+			// Sender details can be retrieved with :
+			//		const char * GetSenderName();
+			//		unsigned int GetSenderWidth();
+			//		unsigned int GetSenderHeight();
+			//		DXGI_FORMAT GetSenderFormat();
+			//		HANDLE GetSenderHandle;
+			//		long GetSenderFrame();
+			//		double GetSenderFps();
+			//
+
+			// The D3D11 device within the SpoutDX class could have changed
+			// if it has switched to use a different sender graphics adapter.
+			// Re-intialize to refresh the application global device pointer.
+			if (receiver.GetAdapterAuto()) {
 				if (g_pd3dDevice != receiver.GetDX11Device()) {
 					ResetDevice();
 					// No more this round because the receiver has been released
@@ -907,45 +1018,34 @@ void Render()
 				}
 			}
 
-			if (g_pReceivedTexture)	g_pReceivedTexture->Release();
-			g_pReceivedTexture = nullptr;
-			receiver.CreateDX11texture(g_pd3dDevice,
-						receiver.GetSenderWidth(),
-						receiver.GetSenderHeight(),
-						receiver.GetSenderFormat(),
-						&g_pReceivedTexture);
+			// A class texture has been received
+			// The received texture can be retrieved with
+			//     ID3D11Texture2D* GetSenderTexture();
 
-			// Any other action required by the receiver can be done here
-			// In this example, clear the shader resource view
+			// In this example, a shader resource view is created if the frame is new
+			if (receiver.IsFrameNew()) {
+				if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
+				g_pSpoutTextureRV = nullptr;
+				D3D11_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc;
+				ZeroMemory(&shaderResourceViewDesc, sizeof(shaderResourceViewDesc));
+				// Matching format with the sender is important
+				shaderResourceViewDesc.Format = receiver.GetSenderFormat();
+				shaderResourceViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				shaderResourceViewDesc.Texture2D.MostDetailedMip = 0;
+				shaderResourceViewDesc.Texture2D.MipLevels = 1;
+				g_pd3dDevice->CreateShaderResourceView(receiver.GetSenderTexture(), &shaderResourceViewDesc, &g_pSpoutTextureRV);
+			}
+		}
+		else {
+			// A sender was not found or the connected sender closed
+			// Release the texture resource view so render uses the default
 			if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
 			g_pSpoutTextureRV = nullptr;
 		}
-
-		// A texture has been received
-		
-		// In this example, a shader resource view is created if the frame is new
-		if (receiver.IsFrameNew()) {
-			if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
-			g_pSpoutTextureRV = nullptr;
-			D3D11_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc;
-			ZeroMemory(&shaderResourceViewDesc, sizeof(shaderResourceViewDesc));
-			// Matching format with the sender is important
-			shaderResourceViewDesc.Format = receiver.GetSenderFormat();
-			shaderResourceViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-			shaderResourceViewDesc.Texture2D.MostDetailedMip = 0;
-			shaderResourceViewDesc.Texture2D.MipLevels = 1;
-			g_pd3dDevice->CreateShaderResourceView(g_pReceivedTexture, &shaderResourceViewDesc, &g_pSpoutTextureRV);
-		}
-
 	}
-	else { 	// A sender was not found or the connected sender closed
-		// Release the receiving texture
-		if (g_pReceivedTexture)	g_pReceivedTexture->Release();
-		g_pReceivedTexture = nullptr;
-		// Release the texture resource view so render uses the default
-		if (g_pSpoutTextureRV) g_pSpoutTextureRV->Release();
-		g_pSpoutTextureRV = nullptr;
-	}
+	// End receive texture
+	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 
 	// Rotate cube around the origin
 	// g_World = XMMatrixRotationY(t);
@@ -1002,16 +1102,12 @@ void Render()
     //
     // Present our back buffer to our front buffer
     //
-    g_pSwapChain->Present( 0, 0 );
+	// Here the frame rate can be extremely high.
+	// To avoid exessive processing, hold a target frame rate
+	// using sync interval for the Present method to synchronize
+	// with vertical blank, typically 60 fps.
+	g_pSwapChain->Present(1, 0);
 
-	//
-	// SPOUT - fps control
-	//
-	// Hold a target frame rate - e.g. 60 or 30fps.
-	// Here you could also use a different Present method such as
-	// "Present( 1, 0 )" to synchronize with vertical blank.
-	// Build with different options to explore.
-	receiver.HoldFps(60);
 
 }
 
@@ -1076,6 +1172,81 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 		}
 		break;
 	}
+	return (INT_PTR)FALSE;
+}
+
+
+// Message handler for selecting sender
+INT_PTR  CALLBACK SenderProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam); // suppress warning
+
+	switch (message) {
+
+	case WM_INITDIALOG:
+		// Sender combo selection
+		{
+			// Create an sender name list for the combo box
+			HWND hwndList = GetDlgItem(hDlg, IDC_SENDERS);
+
+			// Active sender name for initial item
+			char activename[256];
+			receiver.GetActiveSender(activename);
+			int activeindex = 0;
+
+			// Sender count
+			int count = receiver.GetSenderCount();
+
+			// Populate the combo box
+			char name[128];
+			for (int i = 0; i < count; i++) {
+				receiver.GetSender(i, name, 128);
+				// Active sender index for the initial combo box item
+				if (strcmp(name, activename) == 0)
+					activeindex = i;
+				SendMessageA(hwndList, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)name);
+			}
+
+			// Show the active sender as the initial item
+			SendMessageA(hwndList, CB_SETCURSEL, (WPARAM)activeindex, (LPARAM)0);
+		}
+		return TRUE;
+
+	case WM_COMMAND:
+
+		// Combo box selection
+		if (HIWORD(wParam) == CBN_SELCHANGE) {
+			// Get the selected sender name
+			int index = (int)SendMessageA((HWND)lParam, (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			SendMessageA((HWND)lParam, (UINT)CB_GETLBTEXT, (WPARAM)index, (LPARAM)sendername);
+		}
+		// Drop through
+
+		switch (LOWORD(wParam)) {
+
+		case IDOK:
+			// Selected sender
+			if (sendername[0]) {
+				// Make the sender active
+				receiver.SetActiveSender(sendername);
+				// Reset the receiving name
+				// A new sender is detected on the first ReceiveTexture call
+				// LJ DEBUG
+				// receiver.SetReceiverName();
+			}
+			EndDialog(hDlg, 1);
+			break;
+
+		case IDCANCEL:
+			// User pressed cancel.
+			EndDialog(hDlg, 0);
+			return (INT_PTR)TRUE;
+
+		default:
+			return (INT_PTR)FALSE;
+		}
+	}
+
 	return (INT_PTR)FALSE;
 }
 

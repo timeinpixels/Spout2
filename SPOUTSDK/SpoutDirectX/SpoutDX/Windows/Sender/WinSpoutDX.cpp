@@ -17,7 +17,7 @@
 	Compare with a more extensive example sending video frames.
     Compare also with the DirectX 11 Tutorial04 sender example using SendTexture.
 
-                 Copyright(C) 2021 Lynn Jarvis.
+                 Copyright(C) 2020-2022 Lynn Jarvis.
 
     This program is free software : you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -164,6 +164,7 @@ void Render()
 	// Windows screen capture to rgba produces alpha 0 for the whole image.
 	// Some applications might display the received image as black
 	// so alpha of all the pixels should be converted to 255. 
+	// See also : http://www.winprog.org/tutorial/transparency.html
 	// Tests show that the following consumes
 	// 0.6 msec at 1280x720 and 1.5 msec at 1920x1080
 	//
@@ -182,9 +183,10 @@ void Render()
 	//
 	// Optionally hold a target frame rate - e.g. 60 or 30fps.
 	// This is not necessary if the application already has
-	// fps control. But in this example rendering is done
-	// during idle time and render rate can be extremely high.
-	sender.HoldFps(30);
+	// fps control. But in this example, rendering is done
+	// during idle time and render rate can be extremely high
+	// if graphics driver "wait for vertical refresh" is disabled.
+	sender.HoldFps(60);
 
 }
 
@@ -312,10 +314,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			//
 			// Draw the image bitmap
 			//
-
-			// LJ DEBUG
-			// http://www.winprog.org/tutorial/transparency.html
-
+			
 			// Get the client area
 			RECT rcClient;
 			GetClientRect(hWnd, &rcClient);

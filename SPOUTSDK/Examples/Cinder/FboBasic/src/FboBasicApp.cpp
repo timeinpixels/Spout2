@@ -4,7 +4,11 @@
 		Based on the FboBasic example
 		Search on SPOUT for details.
 
-		2021 Lynn Jarvis https://spout.zeal.co/
+		2021-2023 Lynn Jarvis https://spout.zeal.co/
+
+		Revisions - 18.11.21
+				  - 27.12.22 for updated SpoutGL
+
 
 */
 
@@ -42,8 +46,6 @@ class FboBasicApp : public App {
 	void	quit() override;
 #ifdef _receiver
 	void    mouseDown(MouseEvent event) override;
-#else
-	void    mouseMove(MouseEvent event) override;
 #endif
 
   private:
@@ -60,12 +62,7 @@ class FboBasicApp : public App {
 	static const int	FBO_WIDTH = 256, FBO_HEIGHT = 256;
 #endif
 
-	// For data exchange between sender and receiver
-	int mousex = 0;
-	int mousey = 0;
-	char senderdata[256];
 	void showInfo();
-
 
 };
 
@@ -74,7 +71,7 @@ void FboBasicApp::setup()
 	// SPOUT
 	// Optional console or logging
 	// OpenSpoutConsole();
-	EnableSpoutLog();
+	// EnableSpoutLog();
 	
 	// Match window size to Spout demo programs
 	setWindowSize(640, 360);
@@ -125,11 +122,13 @@ void FboBasicApp::renderSceneToFbo()
 	gl::drawColorCube( vec3( 0 ), vec3( 2.2f ) );
 	gl::color( Color::white() );
 
-	// Option :
-	// Send fbo
+	//
+	// SPOUT - Send fbo
+	//
+
 	//   Send the fbo used to texture the cube while it is bound for read.
-	//   The default framebuffer can also be used to send the whole screen.
-	//   See Draw().
+	//   The default "screen" framebuffer can also be used to send the whole screen.
+	//   See Update().
 	// sender.SendFbo(mFbo->getId(), mFbo->getWidth(), mFbo->getHeight());
 
 }
@@ -146,10 +145,49 @@ void FboBasicApp::update()
 		spoutTexture = gl::Texture2d::create(receiver.GetSenderWidth(), receiver.GetSenderHeight());
 	}
 #else
+	
 	// Rotate the torus by .06 radians around an arbitrary axis
 	mRotation *= rotate(0.06f, normalize(vec3(0.16666f, 0.333333f, 0.666666f)));
+
 	// render into our FBO
 	renderSceneToFbo();
+
+	//
+	// SPOUT
+	//
+
+	//
+	// Send the "screen" FBO
+	//
+	// The default framebuffer can be used to send the whole screen.
+	// Call this in "update" rather than "draw" to prevent multiple sender
+	// updates when the window is stretched by the user and re-sized.
+	// Update() is not called during this process, but Draw() is.
+	//
+
+	sender.SendFbo(0, getWindowWidth(), getWindowHeight());
+
+	// On-screen text for what it's sending (see Draw) is not done
+	// in this case or it would be included in the sending frame.
+
+	// An fbo can also be used for send while it is bound.
+	// See renderSceneToFbo().
+
+	//
+	// Send texture
+	//
+
+	// Send the texture attached to the fbo used for the cube
+	// Include the ID of the active framebuffer if one is currently bound.
+	// sender.SendTexture(mFbo->getColorTexture()->getId(),
+		// mFbo->getColorTexture()->getTarget(),
+		// mFbo->getColorTexture()->getWidth(),
+		// mFbo->getColorTexture()->getHeight());
+	// Option : show on-screen sender details (see showInfo() in Draw)
+
+	// Note that only one fbo or texture can be used at the same time.
+
+
 #endif
 
 }
@@ -166,47 +204,17 @@ void FboBasicApp::draw()
 	// Include the ID of the active framebuffer if one is currently bound.
 	receiver.ReceiveTexture(spoutTexture->getId(), spoutTexture->getTarget(), true);
 	
-	// Example of receiving a data buffer.
-	// Receive mouse coordinates from the example sender.
-	// Refer to the sender code.
-	if (receiver.IsFrameNew()) {
-		if (receiver.ReadMemoryBuffer(receiver.GetSenderName(), senderdata, 256)) {
-			sscanf_s(senderdata, "%d %d", &mousex, &mousey);
-		}
-	}
-
 	// Draw the texture and fill the screen if connected to a sender
 	if (receiver.IsConnected()) {
-
 		gl::color(Color::white());
 		gl::draw(spoutTexture, getWindowBounds());
-
-		// Draw the sender mouse position if data has been received.
-		if (mousex > 0) {
-			gl::color(Color(1.0f, 0.0f, 0.0f));
-			gl::drawSolidCircle(vec2(mousex, mousey), 16.0f);
-		}
-
 	}
-
-	// For applications requiring frame accuracy between 
-	// sender and receiver, send a ready signal after
-	// rendering to synchronise the sender to the receiver.
-	// Refer to the sender code.
-	// receiver.SetFrameSync(receiver.GetSenderName());
 
 	// Show what it is receiving
 	showInfo();
 
 #else
-
-	// For applications requiring frame accuracy between 
-	// sender and receiver, wait for a ready signal from 
-	// the receiver before rendering to synchronise with
-	// the receiver fps. Use a timeout greater than the
-	// expected delay. Refer to the receiver code.
-	// sender.WaitFrameSync(sender.GetName(), 67);
-
+	
 	// setup our camera to render the cube
 	CameraPersp cam(getWindowWidth(), getWindowHeight(), 60.0f);
 	cam.setPerspective(60, getWindowAspectRatio(), 1, 1000);
@@ -228,38 +236,11 @@ void FboBasicApp::draw()
 	// and draw the depth texture adjacent
 	// gl::draw(mFbo->getDepthTexture(), Rectf(128, 0, 256, 128));
 	
-
 	//
-	// SPOUT : Sending options
+	// SPOUT
 	//
-	// All sending functions check the sender name and dimensions
-	// and create or update the sender as necessary
-	//
-
-	// Send fbo
-	//   Here we use the default framebuffer to send the whole screen.
-	//   The cube texture fbo can also be used while it is bound.
-	//   See "renderSceneToFbo()"
-	sender.SendFbo(0, getWindowWidth(), getWindowHeight());
-
-	/*
-	// Send texture
-	// Send the texture attached to the fbo used for the cube
-	// Include the ID of the active framebuffer if one is currently bound.
-	sender.SendTexture(mFbo->getColorTexture()->getId(),
-		mFbo->getColorTexture()->getTarget(),
-		mFbo->getColorTexture()->getWidth(),
-		mFbo->getColorTexture()->getHeight());
-	*/
-
-	// Option : Send a data buffer.
-	//   In this example, send mouse coordinates to the receiver.
-	//   Refer to the receiver code.
-	sprintf_s(senderdata, 256, "%d %d", mousex, mousey);
-	sender.WriteMemoryBuffer(sender.GetName(), senderdata, 256);
-
-	// Show what it is sending
-	showInfo();
+	// Show sender details unless sending the screen fbo
+	// showInfo();
 
 
 #endif
@@ -277,13 +258,6 @@ void FboBasicApp::draw()
 			receiver.SelectSender();
 		}
 	}
-#else
-void FboBasicApp::mouseMove(MouseEvent event)
-{
-	// Save the current mouse position
-	mousex = event.getPos().x;
-	mousey = event.getPos().y;
-}
 #endif
 
 // Close the sender or receiver on exit

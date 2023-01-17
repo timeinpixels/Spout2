@@ -1,5 +1,4 @@
 //--------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------
 // File: Tutorial07.cpp
 //
 // - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -150,7 +149,7 @@ int WINAPI wWinMain( _In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 	// SPOUT
 
 	// Optionally enable Spout logging
-	// OpenSpoutConsole(); // Console only without logs for debugging
+	OpenSpoutConsole(); // Console only without logs for debugging
 	// EnableSpoutLog(); // Log to console
 	// EnableSpoutLogFile("Tutorial07.log"); // Log to file
 	// Default log file path is "C:\Users\username\AppData\Roaming\Spout\"
@@ -1023,7 +1022,8 @@ void Render()
     //
     // Present our back buffer to our front buffer
     //
-    g_pSwapChain->Present( 0, 0 );
+    // g_pSwapChain->Present( 0, 0 );
+	g_pSwapChain->Present(1, 0); // Cap at monitor refresh rate
 
 }
 

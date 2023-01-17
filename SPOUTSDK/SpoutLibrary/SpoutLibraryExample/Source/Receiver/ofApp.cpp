@@ -4,62 +4,59 @@
 	using the 2.007 SpoutLibrary C-compatible dll
 
 	1) Copy SpoutLibrary.h to the source files "src" folder
-	
+
 	2) Copy SpoutLibrary.lib to any convenient folder e.g. "libs"
 
 	3) Tell the linker to input SpoutLibrary.lib to your project
 	   For Visual Studio this will be : Project > Properties > Linker > Input
 
-	4) Tell the linker where to find it
+	4) Tell the linker where to find it (libs)
 	   For Visual Studio this will be :
 	   Project > Properties > Linker > General > Aditional library directories
 
 	5) Copy SpoutLibrary.dll to the executable folder e.g. "bin" in this case
 
-   	To use :
+	To use :
 
 	1) Include SpoutLibrary.h in your application header file
 	   #include "SpoutLibrary.h"
 
 	2) Create a spout receiver object pointer
-	    SPOUTLIBRARY * receiver;
+		SPOUTLIBRARY * receiver;
 
 	3) Create an instance of the library
-	    receiver = GetSpout(); 
+		receiver = GetSpout();
 
 	4) Use the object as usual :
-	    receiver->ReceiveTexture(... ) etc.
+		receiver->ReceiveTexture(... ) etc.
 
 	Compare with the receiver example using the Spout SDK source files.
 
 	Spout 2.007
-	OpenFrameworks 10
-	Visual Studio 2017
+	OpenFrameworks 11
+	Visual Studio 2022
 
-	Copyright (C) 2021 Lynn Jarvis.
+	Copyright (C) 2015-2022 Lynn Jarvis.
 
 	=========================================================================
 	This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU Lesser General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+	it under the terms of the GNU Lesser General Public License as published by
+	the Free Software Foundation, either version 3 of the License, or
+	(at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU Lesser General Public License for more details.
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Lesser General Public License
-    along with this program. If not, see <http://www.gnu.org/licenses/>.
+	You should have received a copy of the GNU Lesser General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 	=========================================================================
 */
 #include "ofApp.h"
 
 //--------------------------------------------------------------
-void ofApp::setup(){
-
-	ofBackground(0, 0, 0);
-	ofSetWindowTitle("SpoutLibrary Receiver Example");
+void ofApp::setup() {
 
 	// Create an instance of the Spout library
 	receiver = GetSpout();
@@ -68,27 +65,16 @@ void ofApp::setup(){
 		exit();
 	}
 
-	// Allocate an RGBA texture to receive from the sender
-	// It will be resized later to match the sender - see Update()
-	myTexture.allocate(ofGetWidth(), ofGetHeight(), GL_RGBA);
-
-	// Also allocate an RGB image for this example
-	// it can also be RGBA, BGRA or BGR
-	myImage.allocate(ofGetWidth(), ofGetHeight(), OF_IMAGE_COLOR);
-
-	// For sender data
-	mousex = 0;
-	mousey = 0;
 
 	//
-	// Options
+	// Options (see sender example)
 	//
 
-	// Logging (see sender example)
+	// Logging
 	// receiver->OpenSpoutConsole(); // for debugging when a console is not availlable
 	receiver->EnableSpoutLog(); // Spout logging to console
 
-	// Optionally specify the sender to connect to.
+	// Specify the sender to connect to.
 	// The application will not connect to any other unless the user selects one.
 	// If that sender closes, the application will wait for the nominated sender to open.
 	// receiver->SetReceiverName("Spout Demo Sender");
@@ -100,6 +86,21 @@ void ofApp::setup(){
 	// but sometimes it may be preferable to simply fail if incompatible
 	// so that it is clear whether high speed texture sharing is being used.
 	// receiver->SetAutoShare(false);
+
+	ofSetWindowTitle("SpoutLibrary Receiver Example");
+
+	ofBackground(0, 0, 0);
+
+	// Allocate an RGBA texture to receive from the sender
+	// It is resized later to match the sender - see Update()
+	myTexture.allocate(ofGetWidth(), ofGetHeight(), GL_RGBA);
+
+	// Allocate an RGB image for this example
+	// it can also be RGBA, BGRA or BGR
+	myImage.allocate(ofGetWidth(), ofGetHeight(), OF_IMAGE_COLOR);
+
+	// Starting value for sender fps display
+	g_SenderFps = receiver->GetRefreshRate();
 
 } // end setup
 
@@ -137,37 +138,23 @@ void ofApp::draw() {
 
 	// Option 1 : Receive texture
 	if (receiver->ReceiveTexture(myTexture.getTextureData().textureID, myTexture.getTextureData().textureTarget)) {
-
 		myTexture.draw(0, 0, ofGetWidth(), ofGetHeight());
-
-		// Example of receiving a data buffer.
-		// In this case, receive mouse coordinates from the example sender.
-		// Refer to the sender example.
-		if (receiver->IsFrameNew()) {
-			if (receiver->ReadMemoryBuffer(receiver->GetSenderName(), senderdata, 256)) {
-				sscanf_s(senderdata, "%d %d", &mousex, &mousey);
-			}
-			else {
-				mousex = 0;
-				mousey = 0;
-			}
-		}
 	}
 
 	// Option 2 : Receive pixel data
 	// Specify RGB for this example. Default is RGBA.
 	/*
 	if (receiver->ReceiveImage(myImage.getPixels().getData(), GL_RGB)) {
-		// ofImage update is necessary because the pixels have been changed externally
+		// ofImage update is necessary because the pixels have been changed
 		myImage.update();
 		myImage.draw(0, 0, ofGetWidth(), ofGetHeight());
 	}
 	*/
-
-	// Option 3 : Receive an OpenGL shared texture to access directly
-	// Only if compatible for GL/DX interop, or BindSharedTexture fails
+	
 	/*
-	if (receiver->ReceiveTexture()) {
+	// Option 3 : Receive an OpenGL shared texture to access directly
+	// Only if compatible for GL/DX interop or else BindSharedTexture fails
+	if(receiver->ReceiveTexture()) {
 		// Bind to get access to the shared texture
 		if (receiver->BindSharedTexture()) {
 			// Get the shared texture ID and do something with it
@@ -188,36 +175,27 @@ void ofApp::draw() {
 	}
 	*/
 
-	// Draw the sender mouse position if data has been received.
-	if (receiver->IsConnected() && mousex > 0) {
-		ofSetColor(255, 0, 0);
-		ofDrawCircle((float)mousex, (float)mousey, 0, 16);
-	}
-
 	// On-screen display
 	showInfo();
-
-	// To synchronise the sender to the receiver,
-	// send a ready signal after rendering.
-	// Refer to the sender example.
-	// receiver->SetFrameSync(receiver->GetSenderName());
+	
 }
+
 
 //--------------------------------------------------------------
 void ofApp::showInfo() {
 
 	std::string str;
-	ofSetColor(255);
+	ofSetColor(255, 255, 255);
 
-	if (receiver->IsConnected()) {
+	if(receiver->IsConnected()) {
 
 		// Show sender details
 		str = receiver->GetSenderName(); // sender name
 		str += " (";
 
-		// Show sender sharing mode
+		// Show sender sharing mode if not OpenGL compatible
 		if (receiver->GetSenderCPU())
-			str += " (CPU share : ";
+			str += "CPU share : "; 
 
 		// Show sender size
 		str += to_string(receiver->GetSenderWidth()); // width
@@ -228,11 +206,15 @@ void ofApp::showInfo() {
 		// Frame counting can also be disabled in SpoutSettings
 		if (receiver->GetSenderFrame() > 0) {
 			str += " : fps ";
-			str += to_string((int)(round(receiver->GetSenderFps()))); // frames per second
+			// Average to stabilise fps display
+			g_SenderFps = 0.95*g_SenderFps + 0.05*receiver->GetSenderFps();
+			// Round first or integer cast will truncate to the whole part
+			str += ofToString((int)(round(g_SenderFps)));
 			str += " : frame ";
 			str += to_string(receiver->GetSenderFrame()); // frame since the sender started
 		}
 		str += ") ";
+		
 		ofDrawBitmapString(str, 10, 20);
 	}
 	else {
@@ -266,16 +248,63 @@ void ofApp::showInfo() {
 void ofApp::exit() {
 	// Release the receiver
 	receiver->ReleaseReceiver();
-	// Release the library
+	// Release the library on exit
 	receiver->Release();
+
 }
 
 //--------------------------------------------------------------
-void ofApp::mousePressed(int x, int y, int button) {
-	if (button == 2) { // rh button
-		// Open the sender selection panel
-		// Spout must have been installed
+// RH mouse click to open SpoutPanel for sender selection
+void ofApp::mousePressed(int x, int y, int button){
+	
+	// RH button for "SpoutPanel" sender selection dialog
+	// Spout must have been installed and SpoutPanel
+	// or SpoutSettings run at least once
+	if(button == 2) {
 		receiver->SelectSender();
 	}
+
+	// LH button to show a sender list in the console
+	// This could be used to construct a dialog list for user selection
+	if (button == 0) {
+		// Show the user the current sender list
+		int nSenders = receiver->GetSenderCount();
+		if (nSenders > 0) {
+			printf("\n");
+			char SenderName[256];
+			for (int i = 0; i < nSenders; i++) {
+				receiver->GetSender(i, SenderName);
+				printf("(%d) [%s]\n", i, SenderName);
+			}
+		}
+		printf("Press number to detect\n");
+	}
+
 }
+
+//--------------------------------------------------------------
+// Keypress for sender selection from a list
+void ofApp::keyPressed(int key) {
+
+	// Convert ASCII to number
+	int index = key - 48;
+	// Single key selection (0-9)
+	if (index >= 0 && index <= 9) {
+		char SenderName[256];
+		// Check if the sender exists
+		if (receiver->GetSender(index, SenderName)) {
+			printf("\n");
+			// Set as active
+			receiver->SetActiveSender(SenderName);
+			// Change to the active sender
+			receiver->SetReceiverName();
+			// Change to it and lock to that sender
+			// receiver->SetReceiverName(SenderName);
+		}
+		else {
+			printf("sender index [%d] not found\n", index);
+		}
+	}
+}
+
 

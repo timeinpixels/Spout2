@@ -1,9 +1,10 @@
 ﻿//
-//		SpoutDX
+//			SpoutDX
 //
-//		Send a DirectX11 shared texture
-//		Receive from a Spout sender DirectX11 shared texture
-//		DirectX9 not supported
+//		Sender and receiver for DirectX applications
+//			Send a DirectX11 shared texture
+//			Receive from a Spout sender DirectX11 shared texture
+//			DirectX9 not supported
 //
 // ====================================================================================
 //		Revisions :
@@ -98,10 +99,31 @@
 //					  memoryshare.CloseSenderMemory() in destructor and ReleaseSender
 //		15.04.21	- Add SetFrameSync and WaitFrameSync
 //		29.04.21	- Change IsFrameNew() to return frame class global.
+//		10.06.21	- Remove Memoryshare struct and replace with SpoutSharedMemory object
+//					  Update data functions
+//		01.07.21	- ReadPixelData - add swap r/b argument
+//		04.07.21	- GetSenderCount, GetSender pass through to sendernames class.
+//					- Destructor : do not release receiver connected sender name.
+//		20.07.21	- Correct GetSender to include max size
+//					  Add SendBackBuffer
+//		22.07.21	- Add OpenDirectX check to SendBackBuffer
+//		12.10.21	- Add SendTexture for part of a DirectX11 texture
+//		14.10.21	- ReleaseReceiver - release staging textures
+//					  ReleaseSender - no staging textures used
+//					  Add ReceiveTexture() function to receive to a class texture
+//					  Add GetSenderTexture function to return class texture pointer
+//					  Add class texture and management
+//		01.11.22	- Add GetPerformancePreference, SetPerformancePreference,
+//					  GetPreferredAdapterName, SetPreferredAdapter
+//		08.11.22	- Add IsPreferenceAvailable, IsApplicationPath
+//		16.11.22	- HoldFps double fps argument instead of int
+//		26.12.22	- Initialize all arrays and structures
+//					  Const arg for SendImage
+//		08.01.23	- Add SpoutUtils functions
 //
 // ====================================================================================
 /*
-	Copyright (c) 2014-2021, Lynn Jarvis. All rights reserved.
+	Copyright (c) 2014-2023, Lynn Jarvis. All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without modification, 
 	are permitted provided that the following conditions are met:
@@ -139,10 +161,13 @@ spoutDX::spoutDX()
 	// Initialize variables
 	m_pd3dDevice = nullptr;
 	m_pImmediateContext = nullptr;
+
+	m_pTexture = nullptr;
 	m_pStaging[0] = nullptr;
 	m_pStaging[1] = nullptr;
 	m_Index = 0;
 	m_NextIndex = 0;
+
 	m_pSharedTexture = nullptr;
 	m_dxShareHandle = nullptr;
 	m_SenderNameSetup[0] = 0;
@@ -159,11 +184,7 @@ spoutDX::spoutDX()
 	m_bMirror = false;
 	m_bSwapRB = false;
 	m_bAdapt = false; // Receiver switch to the sender's graphics adapter
-
-	// Memoryshare struct variables
-	memoryshare.senderMem = nullptr;
-	memoryshare.m_Width = 0;
-	memoryshare.m_Height = 0;
+	m_bMemoryShare = GetMemoryShareMode(); // 2.006 memoryshare mode
 
 	ZeroMemory(&m_SenderInfo, sizeof(SharedTextureInfo));
 	ZeroMemory(&m_ShExecInfo, sizeof(m_ShExecInfo));
@@ -172,10 +193,20 @@ spoutDX::spoutDX()
 
 spoutDX::~spoutDX()
 {
-	ReleaseSender();
-	ReleaseReceiver();
+	if (m_bConnected) {
+		// Receiver object
+		// Do not release the connected sender name
+		ReleaseReceiver();
+	}
+	else {
+		// Sender object (or receiver not connected. i.e. not initialized)
+		// Release the sender name if initialized
+		ReleaseSender();
+	}
+
 	CloseDirectX11();
-	memoryshare.CloseSenderMemory();
+	memorybuffer.Close();
+
 }
 
 //---------------------------------------------------------
@@ -188,6 +219,7 @@ spoutDX::~spoutDX()
 
 // Function: OpenDirectX11
 // Initialize and prepare Directx 11
+// Retain a class device and context
 bool spoutDX::OpenDirectX11(ID3D11Device* pDevice)
 {
 	if (!m_pd3dDevice) {
@@ -217,14 +249,14 @@ bool spoutDX::OpenDirectX11(ID3D11Device* pDevice)
 }
 
 // Function: OpenDirectX11
-// Return the DirectX11 device
+// Return the class DirectX11 device
 ID3D11Device* spoutDX::GetDX11Device()
 {
 	return m_pd3dDevice;
 }
 
 // Function: GetDX11Context
-// Return the DirectX11 immediate context
+// Return the class DirectX11 immediate context
 ID3D11DeviceContext* spoutDX::GetDX11Context()
 {
 	return m_pImmediateContext;
@@ -239,6 +271,9 @@ void spoutDX::CloseDirectX11()
 	if (m_pSharedTexture) m_pSharedTexture->Release();
 	m_pSharedTexture = nullptr;
 	m_dxShareHandle = nullptr;
+
+	if (m_pTexture) m_pTexture->Release();
+	m_pTexture = nullptr;
 
 	if (m_pStaging[0]) m_pStaging[0]->Release();
 	if (m_pStaging[1]) m_pStaging[1]->Release();
@@ -312,7 +347,7 @@ bool spoutDX::SetSenderName(const char* sendername)
 
 	// If a sender with this name is already registered, create an incremented name
 	int i = 1;
-	char name[256];
+	char name[256]={};
 	strcpy_s(name, 256, m_SenderName);
 	if (sendernames.FindSenderName(name)) {
 		do {
@@ -336,7 +371,7 @@ void spoutDX::SetSenderFormat(DXGI_FORMAT format)
 
 //---------------------------------------------------------
 // Function: ReleaseSender
-// Close receiver and release resources.
+// Close sender and release resources.
 //
 // A new sender is created or updated by all sending functions
 void spoutDX::ReleaseSender()
@@ -344,16 +379,9 @@ void spoutDX::ReleaseSender()
 	if (m_pSharedTexture)
 		m_pSharedTexture->Release();
 
-	if (m_pStaging[0]) m_pStaging[0]->Release();
-	if (m_pStaging[1]) m_pStaging[1]->Release();
-
 	if (m_bSpoutInitialized)
 		sendernames.ReleaseSenderName(m_SenderName);
 
-	m_pStaging[0] = nullptr;
-	m_pStaging[1] = nullptr;
-	m_Index = 0;
-	m_NextIndex = 0;
 	m_pSharedTexture = nullptr;
 	m_dxShareHandle = nullptr;
 
@@ -362,8 +390,37 @@ void spoutDX::ReleaseSender()
 	m_SenderName[0] = 0;
 	m_bSpoutInitialized = false;
 
-	memoryshare.CloseSenderMemory();
+	// Close shared memory buffer if used
+	memorybuffer.Close();
 
+}
+
+//---------------------------------------------------------
+// Function: SendBackbuffer
+// Get the swap chain's back buffer to a texture for sending.
+// Retreives a single render target.
+// Refer to SendTexture for compatible formats.
+//
+bool spoutDX::SendBackBuffer()
+{
+	// Make sure DirectX is initialized
+	if (!OpenDirectX11())
+		return false;
+
+	// Retrieve one render target
+	ID3D11RenderTargetView *rendertarget = nullptr;
+	m_pImmediateContext->OMGetRenderTargets(1, &rendertarget, nullptr);
+	if (rendertarget) {
+		ID3D11Resource* pBackBufferResource = nullptr;
+		rendertarget->GetResource(&pBackBufferResource);
+		if (pBackBufferResource) {
+			// SendTexture handles sender creation and re-sizing.
+			SendTexture(reinterpret_cast<ID3D11Texture2D*>(pBackBufferResource));
+			return true;
+		}
+	}
+
+	return false;
 }
 
 //---------------------------------------------------------
@@ -425,10 +482,67 @@ bool spoutDX::SendTexture(ID3D11Texture2D* pTexture)
 	return true;
 }
 
+
+//---------------------------------------------------------
+// Function: SendTexture
+// Send part of a DirectX11 texture
+//
+// The region to be copied must be smaller than the texture
+// The sender must be initialized at the width and height of the region
+//
+bool spoutDX::SendTexture(ID3D11Texture2D* pTexture,
+	unsigned int xoffset, unsigned int yoffset,
+	unsigned int width, unsigned int height)
+{
+
+	// Quit if no data
+	if (!pTexture)
+		return false;
+
+	// Make sure DirectX is initialized
+	if (!OpenDirectX11())
+		return false;
+
+	// Check for empty texture and get format
+	D3D11_TEXTURE2D_DESC desc;
+	ZeroMemory(&desc, sizeof(desc));
+	pTexture->GetDesc(&desc);
+	if (desc.Width == 0 || desc.Height == 0)
+		return false;
+
+	// Create or update the sender
+	if (!CheckSender(width, height, (DWORD)desc.Format))
+		return false;
+
+	// Get the region to copy
+	D3D11_BOX sourceRegion={};
+	sourceRegion.left = xoffset;
+	sourceRegion.right = xoffset+width;
+	sourceRegion.top = yoffset;
+	sourceRegion.bottom = yoffset+height;
+	sourceRegion.front = 0;
+	sourceRegion.back = 1;
+
+	// Check the sender mutex for access the shared texture
+	if (frame.CheckTextureAccess(m_pSharedTexture)) {
+		// Copy the texture region to the sender's shared texture
+		m_pImmediateContext->CopySubresourceRegion(m_pSharedTexture, 0, 0, 0, 0, pTexture, 0, &sourceRegion);
+		// Flush the command queue now because the shared texture has been updated on this device
+		m_pImmediateContext->Flush();
+		// Signal a new frame while the mutex is locked
+		frame.SetNewFrame();
+		// Allow access to the shared texture
+		frame.AllowTextureAccess(m_pSharedTexture);
+	}
+
+	return true;
+}
+
+
 //---------------------------------------------------------
 // Function: SendImage
 // Send pixel image
-bool spoutDX::SendImage(unsigned char * pData, unsigned int width, unsigned int height)
+bool spoutDX::SendImage(const unsigned char * pData, unsigned int width, unsigned int height)
 {
 	// Quit if no data
 	if (!pData)
@@ -553,14 +667,31 @@ void spoutDX::ReleaseReceiver()
 	// Wait 4 frames in case the same sender opens again
 	Sleep(67);
 
+	// Sender shared texture pointer
 	if (m_pSharedTexture)
 		m_pSharedTexture->Release();
 	m_pSharedTexture = nullptr;
 	m_dxShareHandle = nullptr;
 
+	// Class receiving texture
+	if (m_pTexture)
+		m_pTexture->Release();
+	m_pTexture = nullptr;
+	
+	// Staging textures for ReceiveImage
+	if (m_pStaging[0]) m_pStaging[0]->Release();
+	if (m_pStaging[1]) m_pStaging[1]->Release();
+	m_pStaging[0] = nullptr;
+	m_pStaging[1] = nullptr;
+	m_Index = 0;
+	m_NextIndex = 0;
+
 	// Close the named access mutex and frame counting semaphore.
 	frame.CloseAccessMutex();
 	frame.CleanupFrameCount();
+
+	// Close shared memory buffer if used
+	memorybuffer.Close();
 
 	// Zero width and height so that they are reset when a sender is found
 	m_Width = 0;
@@ -574,6 +705,68 @@ void spoutDX::ReleaseReceiver()
 
 //---------------------------------------------------------
 // Function: ReceiveTexture
+//  Copy the sender DX11 shared texture to a class texture
+//
+bool spoutDX::ReceiveTexture()
+{
+	// Return if flagged for update
+	// The update flag is reset when the receiving application calls IsUpdated()
+	if (m_bUpdated)
+		return true;
+
+	// Try to receive texture details from a sender
+	if (ReceiveSenderData()) {
+
+		// Was the shared texture pointer retrieved ?
+		if (!m_pSharedTexture) {
+			return false;
+		}
+
+		// The sender name, width, height, format, shared texture handle and pointer have been retrieved.
+		if (m_bUpdated) {
+			m_bUpdated = false; // Reset for ReceiveSenderData
+			// Update the receiving class texture.
+			if (!CheckTexture(m_Width, m_Height, m_dwFormat))
+				return false;
+		}
+
+		// The receiving texture is created on the first update above
+		// ready for copy from the sender's shared texture.
+
+		//
+		// Found a sender
+		//
+		if (frame.CheckTextureAccess(m_pSharedTexture)) {
+			// Check if the sender has produced a new frame.
+			if (frame.GetNewFrame()) {
+				// Copy from the sender's shared texture to the receiving class texture.
+				m_pImmediateContext->CopyResource(m_pTexture, m_pSharedTexture);
+				// Testing has shown that Flush is needed here for the texture
+				// to be immediately available for subsequent copy.
+				// May be removed if the texture is not immediately copied.
+				// Test for the individual application.
+				m_pImmediateContext->Flush();
+			}
+			// Allow access to the shared texture
+			frame.AllowTextureAccess(m_pSharedTexture);
+		}
+		m_bConnected = true;
+
+	} // sender exists
+	else {
+		// There is no sender or the connected sender closed.
+		ReleaseReceiver();
+		// Let the application know.
+		m_bConnected = false;
+	}
+
+	// ReceiveTexture fails if there is no sender or the connected sender closed.
+	return m_bConnected;
+
+}
+
+//---------------------------------------------------------
+// Function: ReceiveTexture
 //  Copy the sender DX11 shared texture
 //
 //    The receiving texture must be the same format
@@ -581,6 +774,10 @@ void spoutDX::ReleaseReceiver()
 //
 bool spoutDX::ReceiveTexture(ID3D11Texture2D** ppTexture)
 {
+	// No texture
+	if (!ppTexture)
+		return false;
+
 	// Return if flagged for update
 	// The update flag is reset when the receiving application calls IsUpdated()
 	if (m_bUpdated)
@@ -604,6 +801,7 @@ bool spoutDX::ReceiveTexture(ID3D11Texture2D** ppTexture)
 		// The application receiving texture is created
 		// by the application on the first update above
 		// ready for copy from the sender's shared texture.
+		// Test for it here.
 		ID3D11Texture2D* pTexture = *ppTexture;
 		if (!pTexture) {
 			return false;
@@ -690,7 +888,7 @@ bool spoutDX::ReceiveImage(unsigned char * pixels,
 				// Copy from the sender's shared texture to the first staging texture
 				m_pImmediateContext->CopyResource(m_pStaging[m_Index], m_pSharedTexture);
 				// Map and read from the second while the first is occupied
-				ReadPixelData(m_pStaging[m_NextIndex], pixels, width, height, bRGB, bInvert);
+				ReadPixelData(m_pStaging[m_NextIndex], pixels, width, height, bRGB, bInvert, false);
 			}
 			// Allow access to the shared texture
 			frame.AllowTextureAccess(m_pSharedTexture);
@@ -727,7 +925,7 @@ void spoutDX::SelectSender()
 bool spoutDX::IsUpdated()
 {
 	bool bRet = m_bUpdated;
-	m_bUpdated = false; // Reset the update flag
+	m_bUpdated = false; // Reset the update flag before return
 	return bRet;
 }
 
@@ -752,6 +950,38 @@ bool spoutDX::IsConnected()
 bool spoutDX::IsFrameNew()
 {
 	return frame.IsFrameNew();
+}
+
+//---------------------------------------------------------
+// Function: GetSenderTexture()
+// Received class texture
+//   Used together with ReceiveTexture()
+//   Can also be called after receiving to an application texture
+//   with ReceiveTexture(ID3D11Texture2D** ppTexture)
+//
+ID3D11Texture2D* spoutDX::GetSenderTexture()
+{
+	if (!m_bConnected)
+		return nullptr;
+
+	if (!m_pTexture) {
+
+		// Create the class texture
+		if (!CheckTexture(GetSenderWidth(), GetSenderHeight(), GetSenderFormat()))
+			return nullptr;
+		
+		if (!m_pTexture)
+			return nullptr;
+
+		// Copy the shared texture to it
+		if (frame.CheckTextureAccess(m_pSharedTexture)) {
+			m_pImmediateContext->CopyResource(m_pTexture, m_pSharedTexture);
+			m_pImmediateContext->Flush();
+		}
+		frame.AllowTextureAccess(m_pSharedTexture);
+
+	}
+	return m_pTexture;
 }
 
 //---------------------------------------------------------
@@ -793,7 +1023,6 @@ unsigned int spoutDX::GetSenderWidth()
 unsigned int spoutDX::GetSenderHeight()
 {
 	return m_Height;
-
 }
 
 //---------------------------------------------------------
@@ -885,11 +1114,7 @@ bool spoutDX::WaitFrameSync(const char *SenderName, DWORD dwTimeout)
 // Number of senders
 int spoutDX::GetSenderCount()
 {
-	std::set<std::string> SenderNameSet;
-	if (sendernames.GetSenderNames(&SenderNameSet)) {
-		return((int)SenderNameSet.size());
-	}
-	return 0;
+	return sendernames.GetSenderCount();
 }
 
 //---------------------------------------------------------
@@ -897,29 +1122,7 @@ int spoutDX::GetSenderCount()
 // Sender item name in the sender names set
 bool spoutDX::GetSender(int index, char* sendername, int sendernameMaxSize)
 {
-	std::set<std::string> SenderNameSet;
-	std::set<std::string>::iterator iter;
-	std::string namestring;
-	char name[256];
-	int i;
-
-	if (sendernames.GetSenderNames(&SenderNameSet)) {
-		if (SenderNameSet.size() < (unsigned int)index) {
-			return false;
-		}
-		i = 0;
-		for (iter = SenderNameSet.begin(); iter != SenderNameSet.end(); iter++) {
-			namestring = *iter; // the name string
-			strcpy_s(name, 256, namestring.c_str()); // the 256 byte name char array
-			if (i == index) {
-				strcpy_s(sendername, sendernameMaxSize, name); // the passed name char array
-				break;
-			}
-			i++;
-		}
-		return true;
-	}
-	return false;
+	return sendernames.GetSender(index, sendername, sendernameMaxSize);
 }
 
 //---------------------------------------------------------
@@ -970,8 +1173,12 @@ void spoutDX::SetMaxSenders(int maxSenders)
 //
 // Group: Graphics adapter
 //
+// Return graphics adapter number and names.
+// Get and set adapter index for the DirectX device.
+//
 // Note that both the Sender and Receiver must use the same graphics adapter.
 //
+
 
 //---------------------------------------------------------
 // Function: GetNumAdapters
@@ -1057,7 +1264,18 @@ void spoutDX::SetAdapterAuto(bool bAdapt)
 
 //---------------------------------------------------------
 // Function: GetSenderAdapter
-// Get sender adapter index and name for a given sender
+// Get adapter index and name for a given sender
+//
+// OpenDX11shareHandle will fail if the share handle has been created 
+// using a different graphics adapter (see spoutDirectX).
+//
+// This function loops though all graphics adapters in the system
+// until OpenDX11shareHandle is successful and the same adapter
+// index as the sender is established. 
+//
+// This adapter can then be used by CreateDX11device when the Spout
+// DirectX device is created.
+//
 int spoutDX::GetSenderAdapter(const char* sendername, char* adaptername, int maxchars)
 {
 	if (!sendername || !sendername[0])
@@ -1074,9 +1292,9 @@ int spoutDX::GetSenderAdapter(const char* sendername, char* adaptername, int max
 
 	SpoutLogNotice("spoutDX::GetSenderAdapter - testing for sender adapter (%s)", sendername);
 
-	SharedTextureInfo info;
+	SharedTextureInfo info={};
 	if (sendernames.getSharedInfo(sendername, &info)) {
-		int nAdapters = spoutdx.GetNumAdapters();
+		const int nAdapters = spoutdx.GetNumAdapters();
 		for (int i = 0; i < nAdapters; i++) {
 			pAdapter = spoutdx.GetAdapterPointer(i);
 			if (pAdapter) {
@@ -1112,10 +1330,448 @@ int spoutDX::GetSenderAdapter(const char* sendername, char* adaptername, int max
 	// Set the SpoutDirectX class adapter pointer back to what it was
 	spoutdx.SetAdapterPointer(pCurrentAdapter);
 
+	// Return the sender adapter index
 	return senderadapter;
 
 }
 
+//
+// Group: Graphics performance
+//
+// Windows Graphics performance preferences.
+//
+// To be effective, performance preference requires the system to have multiple graphics
+// processors which provide a choice between "Power saving" and "High perfformance". 
+// Typically this will be laptop systems with integrated and discrete graphics.
+// Desktop systems with multiple discrete graphics cards do not provide that choice, 
+// even though Windows still allows applications to be set for desired preference.
+//
+// Windows preferences take priority over any settings made by driver
+// programs such as the NVIDIA Control Panel or AMD Control Center for that application.
+// If there is no Windows preference for an application, the graphics driver <settings
+// at https://www.nvidia.com/content/Control-Panel-Help/vLatest/en-us/mergedProjects/nv3d/Setting_the_Preferred_Graphics_Processor.htm> take effect.
+//
+// Performance prefrence settings are available from Windows 10
+// April 2018 update "Redstone 4" (Version 1803, build 17134) and later.
+// Windows 10 SDK required included in Visual Studio 2017 ver.15.7 
+//
+#ifdef NTDDI_WIN10_RS4
+
+//---------------------------------------------------------
+// Function: GetPerformancePreference
+// Get the Windows graphics preference for an application
+//
+//	-1 - Not registered
+//
+//	 0 - DXGI_GPU_PREFERENCE_UNSPECIFIED
+//
+//	 1 - DXGI_GPU_PREFERENCE_MINIMUM_POWER
+//
+//	 2 - DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE
+//
+// If no path is specified, use the current application path
+//
+int spoutDX::GetPerformancePreference(const char* path)
+{
+	return spoutdx.GetPerformancePreference(path);
+}
+
+//---------------------------------------------------------
+// Function: SetPerformancePreference
+// Set the Windows graphics preference for an application
+//
+//     -1 - No preference
+//
+//      0 - Default
+//
+//      1 - Power saving
+//
+//      2 - High performance
+//
+// If no path is specified, use the current application path
+//
+bool spoutDX::SetPerformancePreference(int preference, const char* path)
+{
+	return spoutdx.SetPerformancePreference(preference, path);
+}
+
+
+//
+// https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_6/nf-dxgi1_6-idxgifactory6-enumadapterbygpupreference
+//
+// When DXGI_GPU_PREFERENCE_UNSPECIFIED is specified for the GpuPreference parameter,
+// this method is equivalent to calling IDXGIFactory1::EnumAdapters1.
+//
+// When DXGI_GPU_PREFERENCE_MINIMUM_POWER is specified for the GpuPreference parameter,
+// the order of preference for the adapter returned in ppvAdapter will be:
+// 1. iGPUs (integrated GPUs)
+// 2. dGPUs (discrete GPUs)
+// 3. xGPUs (external GPUs)
+//
+// When DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE is specified for the GpuPreference parameter,
+// the order of preference for the adapter returned in ppvAdapter will be:
+// 1. xGPUs (external GPUs)
+// 2. dGPUs (discrete GPUs)
+// 3. iGPUs (integrated GPUs)
+//
+
+//---------------------------------------------------------
+// Function: GetPreferredAdapterName
+//
+// Get the graphics adapter name for a Windows preference.
+// This is the first adapter for the given preference :
+//
+//    DXGI_GPU_PREFERENCE_UNSPECIFIED - (0) Equivalent to EnumAdapters1
+//
+//    DXGI_GPU_PREFERENCE_MINIMUM_POWER - (1) Integrated GPU
+//
+//    DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE - (2) External GPU / Discrete GPU
+//
+bool spoutDX::GetPreferredAdapterName(int preference, char* adaptername, int maxchars)
+{
+	return spoutdx.GetPreferredAdapterName(preference, adaptername, maxchars);
+}
+
+//---------------------------------------------------------
+// Function: SetPreferredAdapter
+//
+// Set graphics adapter index for a Windows preference
+//
+// Set the adapter index for a performance preference without registering the
+// preference with Windows. This index is used by CreateDX11device when DirectX
+// is intitialized. The function should be called before Spout is initialized.
+//
+//    DXGI_GPU_PREFERENCE_UNSPECIFIED - (0) Equivalent to EnumAdapters1
+//
+//    DXGI_GPU_PREFERENCE_MINIMUM_POWER - (1) Integrated GPU
+//
+//    DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE - (2) External GPU / Discrete GPU
+//
+// The function achieves this result without user Windows preference by getting the name
+// of the preferred adapter using EnumAdapterByGpuPreference, finding the index of
+// that adapter in the current list of adapters, using EnumAdapters and finally 
+// retrieving a pointer to the adapter for CreateDX11device to use. To be effective,
+// this requires a system with multiple graphics processors which enable a choice 
+// between "Power saving" and "High performance".
+//
+bool spoutDX::SetPreferredAdapter(int preference)
+{
+	return spoutdx.SetPreferredAdapter(preference);
+}
+
+
+//---------------------------------------------------------
+// Function: IsPreferenceAvailable()
+// Availability of Windows graphics preference settings.
+//
+// Settings are available from Windows 10 April 2018 update 
+// (Version 1803, build 17134) and later.
+bool spoutDX::IsPreferenceAvailable()
+{
+	return spoutdx.IsPreferenceAvailable();
+}
+
+//---------------------------------------------------------
+// Function: IsApplicationPath
+//
+// Is the path a valid application
+//
+// A valid application path will have a drive letter and terminate with ".exe"
+bool spoutDX::IsApplicationPath(const char* path)
+{
+	return spoutdx.IsApplicationPath(path);
+}
+#endif
+
+
+//
+// Group: Data sharing
+//
+//   General purpose data exchange functions using shared memory.
+//   These functions can be used in addition to texture sharing.
+//   Typical uses will be for data attached to the video frame,
+//   commonly referred to as "per frame Metadata".
+//
+//   Notes for synchronisation.
+//
+//   If used before sending and after receiving, the data will be 
+//   associated with the same video frame, but frames may be missed 
+//   if the receiver has a lower frame rate than the sender.
+//
+//   If strict synchronization is required, the data sharing functions
+//   should be used in combination with event signal functions. The sender
+//   frame rate will be matched exactly to that of the receiver and the 
+//   receiver will not miss any frames.
+//
+//      - void SetFrameSync(const char* SenderName);
+//      - bool WaitFrameSync(const char *SenderName, DWORD dwTimeout = 0);
+//
+//   WaitFrameSync
+//   A sender should use this before rendering or sending texture or data and
+//   wait for a signal from the receiver that it is ready to read another frame.
+//
+//   SetFrameSync
+//   After receiving a texture, rendering the result and reading data
+//   a receiver should signal that it is ready to read another. 
+//
+
+//---------------------------------------------------------
+// Function: WriteMemoryBuffer
+// Write buffer to sender shared memory.
+//
+//    If shared memory has not been created in advance, it will be
+//    created on the first call to this function at the length specified.
+//
+//    This is acceptable if the data to send is fixed in length.
+//    Otherwise the shared memory should be created in advance of sufficient
+//    size to contain the maximum length expected (see CreateMemoryBuffer).
+//
+//    The map is closed when the sender is released.
+//
+bool spoutDX::WriteMemoryBuffer(const char *name, const char* data, int length)
+{
+	// Quit if 2.006 memoryshare mode
+	if (m_bMemoryShare)
+		return false;
+
+	if (!name || !name[0]) {
+		SpoutLogError("SpoutSharedMemory::WriteMemoryBuffer - no name");
+		return false;
+	}
+
+	if (!data) {
+		SpoutLogError("SpoutSharedMemory::WriteMemoryBuffer - no data");
+		return false;
+	}
+
+	// Create a shared memory map for the buffer if it does not exist yet
+	if (memorybuffer.Size() == 0) {
+		// Create a name for the map from the sender name
+		std::string namestring = name;
+		namestring += "_map";
+		// The first 16 bytes are reserved for the memory map size. Make the map larger to compensate. 
+		if (!memorybuffer.Create(namestring.c_str(), length + 16)) {
+			SpoutLogError("SpoutSharedMemory::WriteMemoryBuffer - could not create shared memory");
+			return false;
+		}
+		char* pBuffer = memorybuffer.Lock();
+		if (!pBuffer) {
+			SpoutLogError("SpoutSharedMemory::WriteMemoryBuffer - no buffer lock");
+			return false;
+		}
+		// Convert the map size to decimal digit chars directly to shared memory
+		_itoa_s(length, reinterpret_cast<char *>(pBuffer), 16, 10);
+		memorybuffer.Unlock();
+		SpoutLogNotice("SpoutSharedMemory::WriteMemoryBuffer - created memory buffer %d bytes", length);
+	}
+
+	char* pBuffer = memorybuffer.Lock();
+	if (!pBuffer) {
+		SpoutLogError("SpoutSharedMemory::WriteMemoryBuffer - no buffer lock");
+		return false;
+	}
+
+	// Write user data to shared memory (skip the map size)
+	memcpy(reinterpret_cast<void *>(pBuffer + 16), reinterpret_cast<const void *>(data), length);
+
+	// Terminate the shared memory data with a null.
+	// The map is created larger in advance to allow for it.
+	if (memorybuffer.Size() > (16 + length))
+		*(pBuffer + 16 + length) = 0;
+
+	memorybuffer.Unlock();
+
+	return true;
+}
+
+//---------------------------------------------------------
+// Function: ReadMemoryBuffer
+// Read sender shared memory to a buffer.
+//
+//    Open a sender memory map and retain the handle.
+//    The map is closed when the receiver is released.
+int spoutDX::ReadMemoryBuffer(const char* name, char* data, int maxlength)
+{
+	// Quit if 2.006 memory share mode
+	if (m_bMemoryShare)
+		return 0;
+
+	if (!name || !name[0]) {
+		SpoutLogError("SpoutSharedMemory::ReadMemoryBuffer - no name");
+		return 0;
+	}
+
+	if (!data) {
+		SpoutLogError("SpoutSharedMemory::ReadMemoryBuffer - no data");
+		return 0;
+	}
+
+	// Open a shared memory map for the buffer if it not already
+	if (!memorybuffer.Name()) {
+		// Create a name for the map from the sender name
+		std::string namestring = name;
+		namestring += "_map";
+		// Open the shared memory. This also creates a mutex
+		// for the reader to lock and unlock the map for reads.
+		if (!memorybuffer.Open(namestring.c_str())) {
+			return 0;
+		}
+		SpoutLogNotice("SpoutSharedMemory::ReadMemoryBuffer - opened sender memory map [%s]", memorybuffer.Name());
+	}
+
+	char* pBuffer = memorybuffer.Lock();
+	if (!pBuffer) {
+		SpoutLogError("SpoutSharedMemory::ReadMemoryBuffer - no buffer lock");
+		return 0;
+	}
+
+	// The memory map includes it's size, saved as the first 16 bytes
+	*(pBuffer + 15) = 0; // End for atoi
+
+	// Number of bytes available for data transfer
+	int nbytes = atoi(reinterpret_cast<char *>(pBuffer));
+
+	// Reduce if the user buffer max length is less
+	if (maxlength < nbytes)
+		nbytes = maxlength;
+
+	// Copy bytes from shared memory to the user buffer
+	if (nbytes > 0)
+		memcpy(reinterpret_cast<void *>(data), reinterpret_cast<const void *>(pBuffer + 16), nbytes);
+
+	// Done with the shared memory buffer pointer
+	memorybuffer.Unlock();
+
+	return nbytes;
+
+}
+
+//---------------------------------------------------------
+// Function: CreateMemoryBuffer
+// Create a sender shared memory buffer.
+//
+//    Create a memory map and retain the handle.
+//    This function should be called before any buffer write
+//    if the length of the data to send will vary.
+//    The map is closed when the sender is released.
+bool spoutDX::CreateMemoryBuffer(const char *name, int length)
+{
+	// Quit if 2.006 memoryshare mode
+	if (m_bMemoryShare)
+		return false;
+
+	if (!name || !name[0]) {
+		SpoutLogError("spoutDX::CreateMemoryBuffer - no name");
+		return false;
+	}
+
+	if (memorybuffer.Size() > 0) {
+		SpoutLogError("spoutDX::CreateMemoryBuffer - shared memory already exists");
+		return false;
+	}
+
+	// Create a name for the map from the sender name
+	std::string namestring = name;
+	namestring += "_map";
+
+	// The first 16 bytes are reserved to record the number of bytes available
+	// for data transfer. Make the map 16 bytes larger to compensate. 
+	// Add another 16 bytes to allow for a null terminator.
+	// (Use multiples of 16 for alignment to allow for SSE copy : TODO).
+	if (!memorybuffer.Create(namestring.c_str(), length + 32)) {
+		SpoutLogError("spoutGL::CreateMemoryBuffer - could not create shared memory");
+		return false;
+	}
+
+	// The length requested is the number of bytes to be
+	// available for data transfer (map data size).
+	char* pBuffer = memorybuffer.Lock();
+	if (!pBuffer) {
+		SpoutLogError("spoutGL::CreateMemoryBuffer - no buffer lock");
+		return false;
+	}
+
+	// Convert the map data size to decimal digit chars
+	// directly to the first 16 bytes of the shared memory.
+	_itoa_s(length, reinterpret_cast<char *>(pBuffer), 16, 10);
+
+	memorybuffer.Unlock();
+
+	SpoutLogNotice("spoutDXL::CreateMemoryBuffer - created memory buffer %d bytes", length);
+
+	return true;
+}
+
+//---------------------------------------------------------
+// Function: DeleteMemoryBuffer
+// Delete a sender shared memory buffer.
+//
+bool spoutDX::DeleteMemoryBuffer()
+{
+	// Quit if 2.006 memoryshare mode
+	if (m_bMemoryShare)
+		return false;
+
+	// A sender must create a map
+	// A receiver must open a sender map to find the size
+	if (memorybuffer.Size() == 0) {
+		SpoutLogError("spoutDX::DeleteMemoryBuffer - no shared memory size");
+		return false;
+	}
+
+	memorybuffer.Close();
+
+	return true;
+
+}
+
+
+//---------------------------------------------------------
+// Function: GetMemoryBufferSize
+// Get the size of a sender shared memory buffer.
+//
+int spoutDX::GetMemoryBufferSize(const char *name)
+{
+	if (!m_bSpoutInitialized)
+		return 0;
+
+	// A writer has created the map and recorded the data length in the first 16 bytes.
+	// Another 16 bytes is added to allow for a terminating NULL. (See CreateMemoryBuffer)
+	// The remaining length is the number of bytes available for data transfer.
+	if (memorybuffer.Size() > 32) {
+		return memorybuffer.Size() - 32;
+	}
+
+	// A reader must read the map to get the size
+	// Open a shared memory map for the buffer if it not already
+	if (!memorybuffer.Name()) {
+		// Create a name for the map
+		std::string namestring = name;
+		namestring += "_map";
+		// Open the shared memory map.
+		// This also creates a mutex for the receiver to lock and unlock the map for reads.
+		if (!memorybuffer.Open(namestring.c_str())) {
+			return 0;
+		}
+		SpoutLogNotice("spoutDX::GetMemoryBufferSize - opened sender memory map [%s]", memorybuffer.Name());
+	}
+
+	char* pBuffer = memorybuffer.Lock();
+	if (!pBuffer) {
+		SpoutLogError("spoutDX::GetMemoryBufferSize - no buffer lock");
+		return 0;
+	}
+
+	// The number of bytes of the memory map available for data transfer
+	// is saved in the first 16 bytes.
+	*(pBuffer + 15) = 0; // End for atoi
+	int nbytes = atoi(reinterpret_cast<char *>(pBuffer));
+
+	memorybuffer.Unlock();
+
+	return nbytes;
+
+}
 
 //
 // Sharing modes
@@ -1170,7 +1826,7 @@ bool spoutDX::CreateDX11texture(ID3D11Device* pd3dDevice,
 // Also register the sender name if not already
 void spoutDX::CheckSenderFormat(const char * sendername)
 {
-	SharedTextureInfo info;
+	SharedTextureInfo info={};
 
 	// Correct for format 0 and un-registered
 	if (sendernames.getSharedInfo(sendername, &info)) {
@@ -1199,139 +1855,50 @@ void spoutDX::CheckSenderFormat(const char * sendername)
 		sendernames.RegisterSenderName(sendername);
 
 		// Make active if there is no active sender
-		char activename[256];
+		char activename[256]={};
 		if (!sendernames.GetActiveSender(activename))
 			sendernames.SetActiveSender(sendername);
 	}
 }
 
 //
-// Group: Memory sharing
-//
-//   General purpose data exchange functions using shared memory.
-//   These functions can be used in addition to texture sharing.
-//   Typical uses will be for data attached to the video frame,
-//   commonly referred to as per frame metadata.
-//
-//   If used directly after sending and after receiving, the data
-//   will be associated with the same video frame, but frames may 
-//   be missed if sender and receiver have different frame rates.
-//   If strict synchronization is required, they should be used
-//   in combination with event signal functions.
-//
-//      - void SetFrameSync(const char* SenderName);
-//      - bool WaitFrameSync(const char *SenderName, DWORD dwTimeout = 0);
-//   
-//   Before sending a frame and/or writing data, the sender should wait
-//   for a signal from the receiver that it is ready to read another frame.
-//   Use this before any rendering occurs to prevent timing variability.
-//   After reading a frame and data, the receiver should signal that it is
-//   ready to read another. Use this after rendering has completed.
-//   The practical result is that the sender will be matched exactly to the
-//   frame rate of the receiver and there will be no missed frames.
-//
-//   Shared memory is created and the size established on the first call
-//   to WriteMemoryBuffer and is released when a sender or receiver is closed.
+// SpoutUtils namespace functions for dll access
 //
 
-
-//---------------------------------------------------------
-// Function: WriteMemoryBuffer
-// Write buffer to shared memory.
-//
-//    Create a shared memory map of the required size if it does not exist yet
-//    The map is closed when the sender is released.
-bool spoutDX::WriteMemoryBuffer(const char *sendername, const char* data, int length)
+void spoutDX::OpenSpoutConsole()
 {
-	if (!sendername || !sendername[0]) {
-		SpoutLogError("spoutGLDXinterop::WriteMemoryBuffer - no sender name");
-		return false;
-	}
-
-	if (!data) {
-		SpoutLogError("spoutGLDXinterop::WriteMemoryBuffer - no data");
-		return false;
-	}
-
-	if (memoryshare.GetSenderMemorySize() == 0) {
-		if (!CreateMemoryBuffer(sendername, length))
-			return false;
-	}
-
-	unsigned char* pBuffer = memoryshare.LockSenderMemory();
-	if (!pBuffer) {
-		SpoutLogError("spoutGLDXinterop::WriteMemoryBuffer - no buffer lock");
-		return false;
-	}
-
-	// Write user data to shared memory
-	unsigned char *dest = pBuffer;
-	dest += 16;
-
-	memcpy(reinterpret_cast<void *>(pBuffer + 16), reinterpret_cast<const void *>(data), length);
-
-	memoryshare.UnlockSenderMemory();
-
-	return true;
+	spoututils::OpenSpoutConsole();
 }
 
-//---------------------------------------------------------
-// Function: ReadMemoryBuffer
-// Read shared memory to buffer.
-//
-//    Open a sender memory map and retain the handle.
-//    The map is closed when the receiver is released.
-int spoutDX::ReadMemoryBuffer(const char* sendername, char* data, int maxlength)
+void spoutDX::CloseSpoutConsole(bool bWarning)
 {
-	if (!sendername || !sendername[0]) {
-		SpoutLogError("spoutGLDXinterop::ReadMemoryBuffer - no sender name");
-		return false;
-	}
-
-	if (!data) {
-		SpoutLogError("spoutGLDXinterop::ReadMemoryBuffer - no data");
-		return 0;
-	}
-
-	// Open a shared memory map if it not already
-	if (!memoryshare.GetSenderMemoryName()) {
-		if (!memoryshare.OpenSenderMemory(sendername)) {
-			SpoutLogError("spoutGLDXinterop::ReadMemoryBuffer - could not open sender memory map");
-			return 0;
-		}
-		SpoutLogNotice("spoutGLDXinterop::ReadMemoryBuffer - opened sender memory map [%s]", memoryshare.GetSenderMemoryName());
-	}
-
-	unsigned char* pBuffer = memoryshare.LockSenderMemory();
-	if (!pBuffer) {
-		SpoutLogError("spoutGLDXinterop::ReadMemoryBuffer - no buffer lock");
-		return 0;
-	}
-
-	// The memory map includes it's size, saved as the first 16 bytes
-	*(pBuffer + 15) = 0; // End for atoi
-	int nbytes = atoi(reinterpret_cast<char *>(pBuffer));
-
-	// Reduce if the user buffer max length is less
-	if (maxlength < nbytes)
-		nbytes = maxlength;
-
-	// Copy bytes from shared memory to the user buffer
-	if (nbytes > 0) {
-		memcpy(reinterpret_cast<void *>(data), reinterpret_cast<const void *>(pBuffer + 16), nbytes);
-		// printf("nbytes = %d [%s]\n", nbytes, data);
-	}
-
-	// Done with the shared memory buffer pointer
-	memoryshare.UnlockSenderMemory();
-
-	return nbytes;
+	spoututils::CloseSpoutConsole(bWarning);
 }
+
+void spoutDX::EnableSpoutLog()
+{
+	spoututils::EnableSpoutLog();
+}
+
+void spoutDX::EnableSpoutLogFile(const char* filename, bool append)
+{
+	spoututils::EnableSpoutLogFile(filename, append);
+}
+
+void spoutDX::DisableSpoutLogFile()
+{
+	spoututils::DisableSpoutLogFile();
+}
+
+void spoutDX::DisableSpoutLog()
+{
+	spoututils::DisableSpoutLog();
+}
+
 
 //
 // PRIVATE
 //
-
 
 // --------------------------------------------------------
 // If a sender has not been created yet
@@ -1349,7 +1916,8 @@ bool spoutDX::CheckSender(unsigned int width, unsigned int height, DWORD dwForma
 	// The sender needs a name
 	// Default is the executable name
 	if (!m_SenderName[0]) {
-		SetSenderName();
+		if (!SetSenderName())
+			return false;
 	}
 
 	if (!m_bSpoutInitialized) {
@@ -1374,12 +1942,12 @@ bool spoutDX::CheckSender(unsigned int width, unsigned int height, DWORD dwForma
 		
 		// TODO
 		// This could be a separate function SetHostPath
-		SharedTextureInfo info;
+		SharedTextureInfo info={};
 		if (!sendernames.getSharedInfo(m_SenderName, &info)) {
 			SpoutLogWarning("spoutGL::SetHostPath(%s) - could not get sender info", m_SenderName);
 			return false;
 		}
-		char exepath[256];
+		char exepath[256]={};
 		GetModuleFileNameA(NULL, exepath, sizeof(exepath));
 		// Description is defined as wide chars, but the path is stored as byte chars
 		strcpy_s((char*)info.description, 256, exepath);
@@ -1483,7 +2051,7 @@ bool spoutDX::ReceiveSenderData()
 
 	// Initialization is recorded in this class for sender or receiver
 	// m_Width or m_Height are established when the receiver connects to a sender
-	char sendername[256];
+	char sendername[256]={};
 	strcpy_s(sendername, 256, m_SenderName);
 
 	// Check the entered Sender name to see if it exists
@@ -1509,10 +2077,10 @@ bool spoutDX::ReceiveSenderData()
 
 	// Try to get the sender information
 	// Retrieve width, height, sharehandle and format.
-	SharedTextureInfo info;
+	SharedTextureInfo info={};
 	if (sendernames.getSharedInfo(sendername, &info)) {
 
-		// Memoryshare not supported (no texture share handle)
+		// Memory share mode not supported (no texture share handle)
 		if (info.shareHandle == 0) {
 			ReleaseReceiver();
 			return false;
@@ -1535,7 +2103,6 @@ bool spoutDX::ReceiveSenderData()
 		//   o for a new sender
 		//   o for texture size or format change
 		if (dxShareHandle != m_dxShareHandle) {
-			// printf("    Found new sender (%dx%d) format = %d\n", width, height, dwFormat);
 
 			// Release everything and start again
 			ReleaseReceiver();
@@ -1632,53 +2199,67 @@ void spoutDX::CreateReceiver(const char * SenderName, unsigned int width, unsign
 //
 // A class device and context must have been created using OpenDirectX11()
 //
-bool spoutDX::ReadPixelData(ID3D11Texture2D* pStagingTexture, unsigned char* pixels,
-	unsigned int width, unsigned int height, bool bRGB, bool bInvert)
+// bRGB - pixel data is RGB instead of RGBA
+// bInvert - flip the image
+// bSwap - swap red/blue (BGRA/RGBA). Not available for re-sample
+//
+bool spoutDX::ReadPixelData(ID3D11Texture2D* pStagingSource, unsigned char* destpixels,
+	unsigned int width, unsigned int height, bool bRGB, bool bInvert, bool bSwap)
 {
-	if (!m_pImmediateContext || !pStagingTexture || !pixels)
+	if (!m_pImmediateContext || !pStagingSource || !destpixels)
 		return false;
 
-	// Map the resource so we can access the pixels
-	D3D11_MAPPED_SUBRESOURCE mappedSubResource;
+	// Map the staging texture resource so we can access the pixels
+	D3D11_MAPPED_SUBRESOURCE mappedSubResource={};
 	// Make sure all commands are done before mapping the staging texture
 	m_pImmediateContext->Flush();
 	// Map waits for GPU access
-	HRESULT hr = m_pImmediateContext->Map(pStagingTexture, 0, D3D11_MAP_READ, 0, &mappedSubResource);
+	const HRESULT hr = m_pImmediateContext->Map(pStagingSource, 0, D3D11_MAP_READ, 0, &mappedSubResource);
 	if (SUCCEEDED(hr)) {
 
 		// Copy the staging texture pixels to the user buffer
 		if (!bRGB) {
-			// RGBA buffer
+			// RGBA pixel buffer
 			// TODO : test rgba-rgba resample
+			// TODO : rgba2bgraResample
 			if (width != m_Width || height != m_Height) {
-				spoutcopy.rgba2rgbaResample(mappedSubResource.pData, pixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert);
+				spoutcopy.rgba2rgbaResample(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert);
 			}
 			else {
-				spoutcopy.rgba2rgba(mappedSubResource.pData, pixels, width, height, mappedSubResource.RowPitch, bInvert);
+				if(bSwap)
+					spoutcopy.rgba2bgra(mappedSubResource.pData, destpixels, width, height, mappedSubResource.RowPitch, bInvert);
+				else
+					spoutcopy.rgba2rgba(mappedSubResource.pData, destpixels, width, height, mappedSubResource.RowPitch, bInvert);
 			}
 		}
-		else if (m_dwFormat == 28) {
-			// RGB buffer
+		else if (m_dwFormat == 28) { // DXGI_FORMAT_R8G8B8A8_UNORM
+			// RGBA texture - RGB/BGR pixel buffer
 			// If the texture format is RGBA it has to be converted to BGR by the staging texture copy
 			if (width != m_Width || height != m_Height) {
-				spoutcopy.rgba2bgrResample(mappedSubResource.pData, pixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert);
+				if(bSwap)
+					spoutcopy.rgba2rgbResample(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert);
+				else
+					spoutcopy.rgba2bgrResample(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert);
 			}
 			else {
-				spoutcopy.rgba2bgr(mappedSubResource.pData, pixels, m_Width, m_Height, mappedSubResource.RowPitch, bInvert);
+				if (bSwap)
+					spoutcopy.rgba2rgb(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, bInvert);
+				else
+					spoutcopy.rgba2bgr(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, bInvert);
 			}
 		}
 		else {
 			// Used for SpoutCam to receive RGB images
 			if (width != m_Width || height != m_Height) {
-				spoutcopy.rgba2rgbResample(mappedSubResource.pData, pixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert, m_bMirror, m_bSwapRB);
+				spoutcopy.rgba2rgbResample(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, width, height, bInvert, m_bMirror, m_bSwapRB);
 			}
 			else {
 				// Approx 5 msec at 1920x1080
-				spoutcopy.rgba2rgb(mappedSubResource.pData, pixels, m_Width, m_Height, mappedSubResource.RowPitch, bInvert, m_bMirror, m_bSwapRB);
+				spoutcopy.rgba2rgb(mappedSubResource.pData, destpixels, m_Width, m_Height, mappedSubResource.RowPitch, bInvert, m_bMirror, m_bSwapRB);
 			}
 		}
 
-		m_pImmediateContext->Unmap(pStagingTexture, 0);
+		m_pImmediateContext->Unmap(pStagingSource, 0);
 
 		return true;
 	} // endif DX11 map OK
@@ -1728,7 +2309,7 @@ bool spoutDX::CheckStagingTextures(unsigned int width, unsigned int height, DWOR
 // Create a DirectX 11 staging texture for read and write
 bool spoutDX::CreateDX11StagingTexture(unsigned int width, unsigned int height,	DXGI_FORMAT format,	ID3D11Texture2D** pStagingTexture)
 {
-	if (!m_pd3dDevice)
+	if (!m_pd3dDevice || !pStagingTexture)
 		return false;
 
 	ID3D11Texture2D* pTexture = nullptr;
@@ -1751,11 +2332,11 @@ bool spoutDX::CreateDX11StagingTexture(unsigned int width, unsigned int height,	
 	desc.Usage = D3D11_USAGE_STAGING;
 	desc.BindFlags = 0;
 
-	HRESULT res = m_pd3dDevice->CreateTexture2D(&desc, NULL, &pTexture);
+	const HRESULT res = m_pd3dDevice->CreateTexture2D(&desc, NULL, &pTexture);
 
 	if (res != S_OK) {
 		// http://msdn.microsoft.com/en-us/library/windows/desktop/ff476174%28v=vs.85%29.aspx
-		char tmp[256];
+		char tmp[256]={};
 		sprintf_s(tmp, 256, "spoutDirectX::CreateDX11StagingTexture ERROR : [0x%lx] : ", res);
 		switch (res) {
 		case D3DERR_INVALIDCALL:
@@ -1781,6 +2362,34 @@ bool spoutDX::CreateDX11StagingTexture(unsigned int width, unsigned int height,	
 
 }
 
+// Create new class texture if changed size or does not exist yet
+bool spoutDX::CheckTexture(unsigned int width, unsigned int height, DWORD dwFormat)
+{
+	if (!m_pd3dDevice)
+		return false;
+
+	if (m_pTexture) {
+		D3D11_TEXTURE2D_DESC desc = { 0 };
+		// Get the size to test for change
+		m_pTexture->GetDesc(&desc);
+		if (desc.Width != width || desc.Height != height || desc.Format != (DXGI_FORMAT)dwFormat) {
+			m_pTexture->Release();
+			m_pTexture = nullptr;
+			// Drop through to create new texture
+		}
+		else {
+			return true;
+		}
+	}
+
+	if (spoutdx.CreateDX11Texture(m_pd3dDevice, width, height, (DXGI_FORMAT)dwFormat, &m_pTexture)) {
+		return true;
+	}
+
+	return false;
+}
+
+
 //
 // The following functions are adapted from equivalents in SpoutSDK.cpp
 // for applications not using the entire Spout SDK.
@@ -1792,7 +2401,10 @@ void spoutDX::SelectSenderPanel()
 {
 	HANDLE hMutex1 = NULL;
 	HMODULE module = NULL;
-	char path[MAX_PATH], drive[MAX_PATH], dir[MAX_PATH], fname[MAX_PATH];
+	char path[MAX_PATH]={};
+	char drive[MAX_PATH]={};;
+	char dir[MAX_PATH]={};
+	char fname[MAX_PATH]={};
 
 	// The selected sender is then the "Active" sender and this receiver switches to it.
 	// If Spout is not installed, SpoutPanel.exe has to be in the same folder
@@ -1887,7 +2499,7 @@ void spoutDX::SelectSenderPanel()
 				else {
 					// Look through all processes
 					while (hRes && !done) {
-						int value = _tcsicmp(pEntry.szExeFile, _T("SpoutPanel.exe"));
+						const int value = _tcsicmp(pEntry.szExeFile, _T("SpoutPanel.exe"));
 						if (value == 0) {
 							HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, 0, (DWORD)pEntry.th32ProcessID);
 							if (hProcess != NULL) {
@@ -1924,10 +2536,10 @@ bool spoutDX::CheckSpoutPanel(char *sendername, int maxchars)
 	// If SpoutPanel has been activated, test if the user has clicked OK
 	if (m_bSpoutPanelOpened) { // User has activated spout panel
 
-		SharedTextureInfo TextureInfo;
+		SharedTextureInfo TextureInfo={};
 		HANDLE hMutex = NULL;
-		DWORD dwExitCode;
-		char newname[256];
+		DWORD dwExitCode = 0;
+		char newname[256]={};
 		bool bRet = false;
 
 		// Must find the mutex to signify that SpoutPanel has opened
@@ -1983,44 +2595,3 @@ bool spoutDX::CheckSpoutPanel(char *sendername, int maxchars)
 	return false;
 
 }
-
-//
-// Create shared memory buffer
-//
-bool spoutDX::CreateMemoryBuffer(const char *sendername, unsigned int length)
-{
-	if (!sendername || !sendername[0]) {
-		SpoutLogError("spoutGLDXinterop::CreateMemoryBuffer - cannot create buffer");
-		return false;
-	}
-
-	// A memory map is created and the handle retained.
-	// The map is closed when the object is released
-
-	// Create a shared memory map if it does not exist yet
-	if (memoryshare.GetSenderMemorySize() == 0) {
-		// The first 16 bytes are reserved for the memory map size. Make the map larger to compensate. 
-		if (memoryshare.CreateSenderMemory(sendername, length + 16, 1)) {
-			SpoutLogNotice("spoutGLDXinterop::CreateMemoryBuffer - created shared memory [%s], %d bytes", sendername, length);
-		}
-		else {
-			SpoutLogError("spoutGLDXinterop::CreateMemoryBuffer - could not create shared memory");
-			return false;
-		}
-	}
-
-	unsigned char* pBuffer = memoryshare.LockSenderMemory();
-	if (!pBuffer) {
-		SpoutLogError("spoutGLDXinterop::CreateMemoryBuffer - no buffer lock");
-		return false;
-	}
-
-	// Convert the map size to decimal digit chars directly to shared memory
-	_itoa_s(length, reinterpret_cast<char *>(pBuffer), 16, 10);
-
-	memoryshare.UnlockSenderMemory();
-
-	return true;
-}
-
-

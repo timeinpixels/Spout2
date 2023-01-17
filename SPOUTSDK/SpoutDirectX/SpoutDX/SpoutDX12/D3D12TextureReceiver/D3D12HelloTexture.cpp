@@ -1,4 +1,3 @@
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Adapted for SPOUT output (https://spout.zeal.co/)
 // 
@@ -119,7 +118,7 @@ void D3D12HelloTexture::LoadPipeline()
     swapChainDesc.BufferCount = FrameCount;
     swapChainDesc.Width = m_width;
     swapChainDesc.Height = m_height;
-    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.SampleDesc.Count = 1;
@@ -284,7 +283,6 @@ void D3D12HelloTexture::LoadAssets()
      		// SPOUT
 			// It's too small.
 			// Fill the screen so that a typical 16::9 sender is not distorted.
-			// We could draw a rectangle but this is just a sample.
 			{ {  0.0f,  1.0f, 0.0f }, { 0.5f, 0.0f } },
 			{ {  1.0f, -1.0f, 0.0f }, { 1.0f, 1.0f } },
 			{ { -1.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } }
@@ -334,7 +332,7 @@ void D3D12HelloTexture::LoadAssets()
         // Describe and create a Texture2D.
         D3D12_RESOURCE_DESC textureDesc = {};
         textureDesc.MipLevels = 1;
-        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         textureDesc.Width = TextureWidth;
         textureDesc.Height = TextureHeight;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -506,7 +504,7 @@ void D3D12HelloTexture::OnRender()
 				receiver.GetSenderWidth(),
 				receiver.GetSenderHeight(),
 				D3D12_RESOURCE_STATE_COPY_DEST, // The texture will be copied to 
-				&texformat, // The sender texture format
+				texformat, // The sender texture format
 				&g_pReceivedResource12);
 
 			// Any other action required by the receiver can be done here

@@ -17,7 +17,7 @@
 
 =========================================================================
 
-                 Copyright(C) 2021 Lynn Jarvis.
+                 Copyright(C) 2020-2022 Lynn Jarvis.
 
 This program is free software : you can redistribute it and/or modify
 it under the terms of the GNU Lesser General Public License as published by
@@ -56,10 +56,14 @@ unsigned int g_SenderWidth = 0;        // Received sender width
 unsigned int g_SenderHeight = 0;       // Received sender height
 DWORD g_SenderFormat = 0;              // Received sender format
 
+// Static for sender selection dialog box
+static char sendername[256];
+
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK    SenderProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
 // SPOUT
@@ -135,8 +139,8 @@ void Render()
 {
 	// Get pixels from the sender shared texture.
 	// ReceiveImage handles sender detection, creation and update.
-	// For this example, the rgba pixel buffer is flipped ready for WM_PAINT
-	// but it could also be drawn upside down
+	// Because Windows bitmaps are bottom-up, the rgba pixel buffer is flipped by the 
+	// ReceiveImage function ready for WM_PAINT but it could also be drawn upside down
 	if (receiver.ReceiveImage(pixelBuffer, g_SenderWidth, g_SenderHeight, false, true)) { // RGB = false, invert = true
 		
 		// IsUpdated() returns true if the sender has changed
@@ -169,8 +173,9 @@ void Render()
 
 	// Optionally hold a target frame rate - e.g. 60 or 30fps.
 	// This is not necessary if the application already has
-	// fps control. But in this example rendering is done
-	// during idle time and render rate can be extremely high.
+	// fps control. But in this example, rendering is done
+	// during idle time and render rate can be extremely high
+	// if graphics driver "wait for vertical refresh" is disabled.
 	receiver.HoldFps(60);
 
 }
@@ -268,10 +273,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             // Parse the menu selections:
             switch (wmId)
             {
+
             case IDM_ABOUT:
                 DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
                 break;
-            case IDM_EXIT:
+			case IDM_OPEN:
+				// Sender selection dialog box 
+				sendername[0] = 0; // Clear static name for dialog
+				DialogBox(hInst, MAKEINTRESOURCE(IDD_SENDERBOX), hWnd, (DLGPROC)SenderProc);
+				// Open select a sender
+				// receiver.SelectSender();
+				break;
+
+			case IDM_EXIT:
                 DestroyWindow(hWnd);
                 break;
             default:
@@ -311,8 +325,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 					bmi.bmiHeader.biPlanes = 1;
 					bmi.bmiHeader.biBitCount = 32;
 					bmi.bmiHeader.biCompression = BI_RGB;
-					// If the format is BGRA it's a natural match
-					if (g_SenderFormat == 87) {
+					// If the received sender format is BGRA or BGRX it's a natural match
+					if (g_SenderFormat == 87 || g_SenderFormat == 88) {
 						// Very fast (< 1msec at 1280x720)
 						// StretchDIBits adapts the pixel buffer received from the sender
 						// to the window size. The sender can be resized or changed.
@@ -445,5 +459,80 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     }
     return (INT_PTR)FALSE;
 }
+
+// SPOUT : added for this example
+// Message handler for selecting sender
+INT_PTR  CALLBACK SenderProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam); // suppress warning
+
+	switch (message) {
+
+	case WM_INITDIALOG:
+		// Sender combo selection
+	{
+		// Create an sender name list for the combo box
+		HWND hwndList = GetDlgItem(hDlg, IDC_SENDERS);
+
+		// Active sender name for initial item
+		char activename[256];
+		receiver.GetActiveSender(activename);
+		int activeindex = 0;
+
+		// Sender count
+		int count = receiver.GetSenderCount();
+
+		// Populate the combo box
+		char name[128];
+		for (int i = 0; i < count; i++) {
+			receiver.GetSender(i, name, 128);
+			// Active sender index for the initial combo box item
+			if (strcmp(name, activename) == 0)
+				activeindex = i;
+			SendMessageA(hwndList, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)name);
+		}
+
+		// Show the active sender as the initial item
+		SendMessageA(hwndList, CB_SETCURSEL, (WPARAM)activeindex, (LPARAM)0);
+	}
+	return TRUE;
+
+	case WM_COMMAND:
+
+		// Combo box selection
+		if (HIWORD(wParam) == CBN_SELCHANGE) {
+			// Get the selected sender name
+			int index = (int)SendMessageA((HWND)lParam, (UINT)CB_GETCURSEL, (WPARAM)0, (LPARAM)0);
+			SendMessageA((HWND)lParam, (UINT)CB_GETLBTEXT, (WPARAM)index, (LPARAM)sendername);
+		}
+		// Drop through
+
+		switch (LOWORD(wParam)) {
+
+		case IDOK:
+			// Selected sender
+			if (sendername[0]) {
+				// Make the sender active
+				receiver.SetActiveSender(sendername);
+				// Reset the receiving name
+				// A new sender is detected on the first ReceiveTexture call
+				receiver.SetReceiverName();
+			}
+			EndDialog(hDlg, 1);
+			break;
+
+		case IDCANCEL:
+			// User pressed cancel.
+			EndDialog(hDlg, 0);
+			return (INT_PTR)TRUE;
+
+		default:
+			return (INT_PTR)FALSE;
+		}
+	}
+
+	return (INT_PTR)FALSE;
+}
+
 
 // That's all..
